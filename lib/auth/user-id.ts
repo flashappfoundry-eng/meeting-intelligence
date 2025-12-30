@@ -32,4 +32,47 @@ export function coerceUserIdToUuid(userId: string) {
   )}-${hex.slice(20)}`;
 }
 
+/**
+ * Derive a stable-ish user identity string from request headers.
+ *
+ * Priority (first present wins):
+ * - x-user-id
+ * - x-openai-user-id
+ * - x-openai-sub
+ *
+ * Fallback:
+ * - Deterministic hash of a few stable-ish request traits (ip/user-agent/origin/etc)
+ *   to avoid throwing when ChatGPT's MCP client doesn't forward custom headers.
+ */
+export function deriveUserIdFromHeaders(headers: Headers) {
+  const direct =
+    headers.get("x-user-id") ??
+    headers.get("x-openai-user-id") ??
+    headers.get("x-openai-sub") ??
+    null;
+
+  if (direct && direct.trim()) return direct.trim();
+
+  const parts = [
+    headers.get("x-openai-conversation-id"),
+    headers.get("x-forwarded-for"),
+    headers.get("x-real-ip"),
+    headers.get("cf-connecting-ip"),
+    headers.get("user-agent"),
+    headers.get("accept-language"),
+    headers.get("origin"),
+    headers.get("host"),
+  ]
+    .map((v) => v?.trim())
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return "anonymous-user";
+  }
+
+  const seed = parts.join("|");
+  const hash = crypto.createHash("sha256").update(seed, "utf8").digest("hex");
+  return `anonymous:${hash.slice(0, 32)}`;
+}
+
 

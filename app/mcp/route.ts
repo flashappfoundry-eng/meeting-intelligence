@@ -15,9 +15,10 @@ import { extractActionItems, generateMeetingSummary } from "@/lib/integrations/o
 import { getUserTokens, refreshTokenIfNeeded } from "@/lib/auth/tokens";
 import { createZoomClient } from "@/lib/integrations/zoom";
 import { createAsanaClient } from "@/lib/integrations/asana";
-import { coerceUserIdToUuid } from "@/lib/auth/user-id";
+import { coerceUserIdToUuid, deriveUserIdFromHeaders } from "@/lib/auth/user-id";
 
 type TranscriptCacheEntry = {
+  ownerUserId: string;
   transcriptId: string;
   transcriptText: string;
   meetingTitle?: string;
@@ -40,41 +41,8 @@ function makeStubOutput<TName extends ToolName>(
   name: TName,
   input: ToolInput<TName>,
 ): ToolOutput<TName> {
+  void input;
   switch (name) {
-    case "paste_transcript": {
-      const { transcript_text, meeting_title, meeting_date } =
-        input as ToolInput<"paste_transcript">;
-
-      const validation = validateTranscriptForProcessing(transcript_text);
-      if (!validation.safe) {
-        throw new Error(validation.warning ?? "Transcript rejected.");
-      }
-
-      const words = transcript_text.trim().split(/\s+/).filter(Boolean);
-      const word_count = words.length;
-      const estimated_duration_minutes = Math.ceil(word_count / 150);
-      const transcript_id = `manual-${Date.now()}-${Math.random()
-        .toString(36)
-        .slice(2, 9)}`;
-
-      getTranscriptCache()[transcript_id] = {
-        transcriptId: transcript_id,
-        transcriptText: transcript_text,
-        meetingTitle: meeting_title,
-        meetingDate: meeting_date,
-        wordCount: word_count,
-        estimatedDurationMinutes: estimated_duration_minutes,
-        createdAt: new Date().toISOString(),
-      };
-
-      return toolSchemas.paste_transcript.output.parse({
-        transcript_id,
-        word_count,
-        estimated_duration_minutes,
-        ready_for_analysis: true,
-        preview: transcript_text.slice(0, 200),
-      }) as ToolOutput<TName>;
-    }
     default: {
       // Fallback stub for tools not wired in MVP.
       return {} as ToolOutput<TName>;
@@ -83,10 +51,9 @@ function makeStubOutput<TName extends ToolName>(
 }
 
 function requireUserId(userId: string | undefined) {
-  if (!userId) {
-    throw new Error("Missing x-user-id header for MCP request.");
-  }
-  return coerceUserIdToUuid(userId);
+  // Always return a deterministic UUID, even if the upstream client didn't provide x-user-id.
+  // We only show user-facing errors when a tool actually needs OAuth tokens.
+  return coerceUserIdToUuid(userId ?? "anonymous-user");
 }
 
 async function requireZoomClient(userId: string) {
@@ -133,7 +100,7 @@ async function handleTool<TName extends ToolName>(
       const { meeting_id } = input as ToolInput<"get_meeting_summary">;
       const cached = getTranscriptCache()[meeting_id];
 
-      if (cached) {
+      if (cached && cached.ownerUserId === userId) {
         const summary = await generateMeetingSummary({
           transcriptText: cached.transcriptText,
           meetingTitle: cached.meetingTitle,
@@ -168,7 +135,7 @@ async function handleTool<TName extends ToolName>(
       const { meeting_id } = input as ToolInput<"get_action_items">;
       const cached = getTranscriptCache()[meeting_id];
 
-      if (cached) {
+      if (cached && cached.ownerUserId === userId) {
         const items = await extractActionItems({ transcriptText: cached.transcriptText });
         return toolSchemas.get_action_items.output.parse({
           meeting_id,
@@ -187,6 +154,42 @@ async function handleTool<TName extends ToolName>(
       return toolSchemas.get_action_items.output.parse({
         meeting_id,
         items: [],
+      }) as ToolOutput<TName>;
+    }
+
+    case "paste_transcript": {
+      const { transcript_text, meeting_title, meeting_date } =
+        input as ToolInput<"paste_transcript">;
+
+      const validation = validateTranscriptForProcessing(transcript_text);
+      if (!validation.safe) {
+        throw new Error(validation.warning ?? "Transcript rejected.");
+      }
+
+      const words = transcript_text.trim().split(/\s+/).filter(Boolean);
+      const word_count = words.length;
+      const estimated_duration_minutes = Math.ceil(word_count / 150);
+      const transcript_id = `manual-${Date.now()}-${Math.random()
+        .toString(36)
+        .slice(2, 9)}`;
+
+      getTranscriptCache()[transcript_id] = {
+        ownerUserId: userId,
+        transcriptId: transcript_id,
+        transcriptText: transcript_text,
+        meetingTitle: meeting_title,
+        meetingDate: meeting_date,
+        wordCount: word_count,
+        estimatedDurationMinutes: estimated_duration_minutes,
+        createdAt: new Date().toISOString(),
+      };
+
+      return toolSchemas.paste_transcript.output.parse({
+        transcript_id,
+        word_count,
+        estimated_duration_minutes,
+        ready_for_analysis: true,
+        preview: transcript_text.slice(0, 200),
       }) as ToolOutput<TName>;
     }
 
@@ -298,7 +301,10 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const baseUrl = `${url.origin}/mcp`;
 
-  const userId = req.headers.get("x-user-id") ?? undefined;
+  // ChatGPT MCP client won't forward arbitrary custom headers like x-user-id.
+  // Prefer x-user-id if provided, otherwise derive a stable fallback identity
+  // from OpenAI-specific headers or a deterministic hash of request traits.
+  const userId = deriveUserIdFromHeaders(req.headers);
   const server = createServer(baseUrl, userId);
 
   // Official MCP transport for Web Standard Request/Response.
