@@ -10,7 +10,7 @@ import {
 } from "@/lib/auth/oauth";
 import { coerceUserIdToUuid, deriveUserIdFromHeaders } from "@/lib/auth/user-id";
 import { db } from "@/lib/db/client";
-import { oauthStates } from "@/lib/db/schema";
+import { oauthStates, users } from "@/lib/db/schema";
 
 function isPlatform(x: string): x is OAuthPlatform {
   return x === "zoom" || x === "asana";
@@ -20,8 +20,10 @@ export async function POST(
   req: NextRequest,
   context: { params: Promise<{ platform: string }> },
 ) {
+  let platformForLog: string | undefined;
   try {
     const { platform: platformParam } = await context.params;
+    platformForLog = platformParam;
     if (!isPlatform(platformParam)) {
       return NextResponse.json({ ok: false, error: "Unsupported platform" }, { status: 400 });
     }
@@ -66,6 +68,14 @@ export async function POST(
 
     const expiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
+    // Ensure the user row exists, since oauth_states.user_id has an FK to users.id.
+    // We don't have a full user provisioning flow yet, so we create a stable placeholder.
+    const placeholderEmail = `user-${userUuid}@example.invalid`;
+    await db
+      .insert(users)
+      .values({ id: userUuid, email: placeholderEmail })
+      .onConflictDoNothing({ target: users.id });
+
     await db.insert(oauthStates).values({
       state,
       provider: platformParam,
@@ -84,7 +94,41 @@ export async function POST(
 
     return NextResponse.json({ ok: true, url: authUrl });
   } catch (err) {
-    console.error("OAuth start error", err);
+    const message = err instanceof Error ? err.message : String(err);
+    console.error("[oauth-start] error", {
+      platform: platformForLog,
+      message,
+    });
+
+    const lower = message.toLowerCase();
+
+    if (
+      lower.includes("missing_connection_string") ||
+      lower.includes("no 'postgres_url'") ||
+      lower.includes("no 'database_url'") ||
+      lower.includes("vercel_postgres")
+    ) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Database is not configured or reachable. OAuth requires Postgres to store PKCE state. Check POSTGRES_URL/DATABASE_URL and try again.",
+        },
+        { status: 500 },
+      );
+    }
+
+    if (lower.includes("foreign key") && lower.includes("oauth_states")) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error:
+            "Unable to store OAuth state due to a database constraint. Please contact support.",
+        },
+        { status: 500 },
+      );
+    }
+
     return NextResponse.json(
       {
         ok: false,

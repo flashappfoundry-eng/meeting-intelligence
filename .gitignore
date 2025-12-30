@@ -43,3 +43,6 @@ next-env.d.ts
 
 .vercel
 .env*.local
+dev.log
+dev.out.log
+dev.err.log
