@@ -114,8 +114,13 @@ export const oauthConfig: Record<OAuthPlatform, OAuthConfig> = {
     clientId: process.env.ASANA_CLIENT_ID ?? "",
     clientSecret: process.env.ASANA_CLIENT_SECRET ?? "",
     redirectUri: process.env.ASANA_REDIRECT_URI ?? "",
-    // Asana recommends using "default" unless you need fine-grained scopes.
-    scopes: ["default"],
+    scopes: [
+      "tasks:read",
+      "tasks:write",
+      "users:read",
+      "projects:read",
+      "workspaces:read",
+    ],
   },
 };
 
