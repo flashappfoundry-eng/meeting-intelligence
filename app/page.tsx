@@ -5,14 +5,20 @@ import * as React from "react";
 type OAuthInitResponse = { ok: boolean; url?: string; error?: string };
 
 export default function HomePage() {
-  const [loading, setLoading] = React.useState<"zoom" | "asana" | null>(null);
+  const [isZoomLoading, setIsZoomLoading] = React.useState(false);
+  const [isAsanaLoading, setIsAsanaLoading] = React.useState(false);
   const [error, setError] = React.useState<string | null>(null);
+
+  const isAnyLoading = isZoomLoading || isAsanaLoading;
 
   async function connect(platform: "zoom" | "asana") {
     setError(null);
-    setLoading(platform);
+    if (platform === "zoom") setIsZoomLoading(true);
+    else setIsAsanaLoading(true);
     try {
-      const res = await fetch(`/api/auth/${platform}`, {
+      const path = platform === "zoom" ? "/api/auth/zoom" : "/api/auth/asana";
+
+      const res = await fetch(path, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -20,15 +26,31 @@ export default function HomePage() {
         },
       });
 
-      const data = (await res.json()) as OAuthInitResponse;
-      if (!res.ok || !data.ok || !data.url) {
-        throw new Error(data.error || `Failed to start ${platform} OAuth`);
+      // Defensive JSON parsing: always handle "empty body" / HTML error pages gracefully.
+      let data: OAuthInitResponse | null = null;
+      try {
+        data = (await res.clone().json()) as OAuthInitResponse;
+      } catch {
+        const text = await res.text();
+        throw new Error(
+          text ||
+            "Auth endpoint returned an invalid response. Please check server logs.",
+        );
+      }
+
+      if (!data?.ok || !data.url) {
+        throw new Error(
+          data?.error ||
+            "Auth endpoint did not return a URL. Check OAuth env vars and try again.",
+        );
       }
 
       window.location.href = data.url;
     } catch (e) {
       setError(e instanceof Error ? e.message : "Unknown error");
-      setLoading(null);
+    } finally {
+      setIsZoomLoading(false);
+      setIsAsanaLoading(false);
     }
   }
 
@@ -47,19 +69,19 @@ export default function HomePage() {
             <button
               type="button"
               onClick={() => connect("zoom")}
-              disabled={loading !== null}
+              disabled={isAnyLoading}
               className="h-12 w-full rounded-xl bg-zinc-900 px-4 text-base font-semibold text-white transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:opacity-60 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-200"
             >
-              {loading === "zoom" ? "Connecting..." : "Connect Zoom"}
+              {isZoomLoading ? "Connecting..." : "Connect Zoom"}
             </button>
 
             <button
               type="button"
               onClick={() => connect("asana")}
-              disabled={loading !== null}
+              disabled={isAnyLoading}
               className="h-12 w-full rounded-xl border border-zinc-300 bg-white px-4 text-base font-semibold text-zinc-900 transition-colors hover:bg-zinc-50 disabled:cursor-not-allowed disabled:opacity-60 dark:border-zinc-800 dark:bg-zinc-950 dark:text-zinc-50 dark:hover:bg-zinc-900"
             >
-              {loading === "asana" ? "Connecting..." : "Connect Asana"}
+              {isAsanaLoading ? "Connecting..." : "Connect Asana"}
             </button>
           </div>
 
