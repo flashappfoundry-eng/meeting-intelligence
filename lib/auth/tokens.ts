@@ -2,6 +2,7 @@ import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/client";
 import { oauthStates, oauthTokens } from "@/lib/db/schema";
+import { coerceUserIdToUuid } from "@/lib/auth/user-id";
 import {
   decryptToken,
   encryptToken,
@@ -26,11 +27,27 @@ function isExpiredOrNearExpiry(expiresAt: Date | null, skewMs: number) {
 }
 
 export async function getUserTokens(userId: string, platform: OAuthPlatform) {
-  const rows = await db
-    .select()
-    .from(oauthTokens)
-    .where(and(eq(oauthTokens.userId, userId), eq(oauthTokens.provider, platform)))
-    .limit(1);
+  const userUuid = coerceUserIdToUuid(userId);
+
+  // Local/dev safety: if Postgres isn't configured, behave as if no tokens exist.
+  // This keeps MCP tool errors user-friendly ("connect your account") instead of leaking SQL.
+  if (!process.env.POSTGRES_URL && !process.env.DATABASE_URL) {
+    return null;
+  }
+
+  let rows: Array<typeof oauthTokens.$inferSelect>;
+  try {
+    rows = await db
+      .select()
+      .from(oauthTokens)
+      .where(and(eq(oauthTokens.userId, userUuid), eq(oauthTokens.provider, platform)))
+      .limit(1);
+  } catch (e) {
+    // If the DB is unreachable/misconfigured in local dev, behave as if no tokens exist.
+    // This avoids leaking SQL errors through MCP and keeps UX aligned with "connect account first".
+    void e;
+    return null;
+  }
 
   const row = rows[0];
   if (!row) return null;
@@ -52,6 +69,8 @@ export async function saveUserTokens(
   platformEmail?: string,
   scopes?: string[],
 ) {
+  const userUuid = coerceUserIdToUuid(userId);
+
   const expiresAt =
     typeof tokens.expires_in === "number" ? new Date(nowMs() + tokens.expires_in * 1000) : null;
 
@@ -64,7 +83,7 @@ export async function saveUserTokens(
   await db
     .insert(oauthTokens)
     .values({
-      userId,
+      userId: userUuid,
       provider: platform,
       providerUserId: platformUserId ?? null,
       providerEmail: platformEmail ?? null,

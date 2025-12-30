@@ -15,6 +15,7 @@ import { extractActionItems, generateMeetingSummary } from "@/lib/integrations/o
 import { getUserTokens, refreshTokenIfNeeded } from "@/lib/auth/tokens";
 import { createZoomClient } from "@/lib/integrations/zoom";
 import { createAsanaClient } from "@/lib/integrations/asana";
+import { coerceUserIdToUuid } from "@/lib/auth/user-id";
 
 type TranscriptCacheEntry = {
   transcriptId: string;
@@ -85,7 +86,7 @@ function requireUserId(userId: string | undefined) {
   if (!userId) {
     throw new Error("Missing x-user-id header for MCP request.");
   }
-  return userId;
+  return coerceUserIdToUuid(userId);
 }
 
 async function requireZoomClient(userId: string) {
@@ -257,13 +258,13 @@ function createServer(baseUrl: string, userId: string | undefined) {
               handler: (
                 input: unknown,
                 ctx: { baseUrl: string; userId?: string },
-              ) => unknown;
+              ) => unknown | Promise<unknown>;
             }
           >;
         }).__dxWidgets?.[name];
 
         const structuredContent = widget
-          ? widget.handler(args, { baseUrl, userId })
+          ? await widget.handler(args, { baseUrl, userId })
           : makeStubOutput(name, args as ToolInput<typeof name>);
 
         return {

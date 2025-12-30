@@ -8,6 +8,7 @@ import {
   generateState,
   type OAuthPlatform,
 } from "@/lib/auth/oauth";
+import { coerceUserIdToUuid } from "@/lib/auth/user-id";
 import { db } from "@/lib/db/client";
 import { oauthStates } from "@/lib/db/schema";
 
@@ -28,6 +29,7 @@ export async function POST(
   if (!userId) {
     return NextResponse.json({ ok: false, error: "Missing x-user-id header" }, { status: 401 });
   }
+  const userUuid = coerceUserIdToUuid(userId);
 
   // Optional: allow callers to stash a post-success redirect.
   const url = new URL(req.url);
@@ -42,7 +44,7 @@ export async function POST(
   await db.insert(oauthStates).values({
     state,
     provider: platformParam,
-    userId,
+    userId: userUuid,
     redirectUri: redirectUrl,
     codeVerifier,
     expiresAt,
@@ -52,7 +54,7 @@ export async function POST(
     platform: platformParam,
     state,
     codeChallenge,
-    userId,
+    userId: userUuid,
   });
 
   return NextResponse.json({ ok: true, url: authUrl });
