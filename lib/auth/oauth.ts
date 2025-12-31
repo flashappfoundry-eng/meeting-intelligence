@@ -105,7 +105,11 @@ export const oauthConfig: Record<OAuthPlatform, OAuthConfig> = {
     clientSecret: process.env.ZOOM_CLIENT_SECRET ?? "",
     redirectUri: process.env.ZOOM_REDIRECT_URI ?? "",
     // UPDATED: Use exact scope names from Zoom Marketplace app
-    scopes: ["meeting:read:meeting", "cloud_recording:read:list_user_recordings"],
+    scopes: [
+      "meeting:read:meeting",
+      "cloud_recording:read:list_user_recordings",
+      "cloud_recording:read:recording", // For transcript download
+    ],
   },
   asana: {
     authUrl: "https://app.asana.com/-/oauth_authorize",
