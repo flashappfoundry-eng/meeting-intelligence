@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/client";
-import { oauthStates, oauthTokens } from "@/lib/db/schema";
+import { oauthStates, oauthTokens, users } from "@/lib/db/schema";
 import { coerceUserIdToUuid } from "@/lib/auth/user-id";
 import {
   decryptToken,
@@ -99,6 +99,23 @@ export async function saveUserTokens(
   });
 
   try {
+    // CRITICAL FIX: Create user record if it doesn't exist
+    // This satisfies the foreign key constraint on oauth_tokens.user_id
+    // Use a unique placeholder email based on userUuid to avoid email unique constraint conflicts
+    const placeholderEmail = platformEmail || `${userUuid}@oauth.placeholder`;
+    console.log("[saveUserTokens] Ensuring user exists:", { userUuid, placeholderEmail });
+
+    await db
+      .insert(users)
+      .values({
+        id: userUuid,
+        email: placeholderEmail,
+        name: platformUserId || userId,
+      })
+      .onConflictDoNothing(); // Don't fail if user already exists
+
+    console.log("[saveUserTokens] User ensured, now saving tokens");
+
     await db
       .insert(oauthTokens)
       .values({
