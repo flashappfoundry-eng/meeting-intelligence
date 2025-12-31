@@ -87,6 +87,17 @@ export async function saveUserTokens(
     hasRefreshToken: !!encryptedRefresh,
   });
 
+  console.log("[saveUserTokens] Query parameters:", {
+    userUuid,
+    platform,
+    accessTokenLength: encryptedAccess?.length,
+    refreshTokenLength: encryptedRefresh?.length,
+    accessTokenPreview: encryptedAccess?.substring(0, 50) + "...",
+    expiresAt: expiresAt?.toISOString(),
+    hasProviderUserId: !!platformUserId,
+    hasProviderEmail: !!platformEmail,
+  });
+
   try {
     await db
       .insert(oauthTokens)
@@ -117,14 +128,41 @@ export async function saveUserTokens(
       });
 
     console.log("[saveUserTokens] Success!");
-  } catch (error) {
-    console.error("[saveUserTokens] Database error:", {
+  } catch (error: unknown) {
+    // Log the full error object with all properties
+    console.error("[saveUserTokens] Database error - Full object:", error);
+
+    // Log specific error properties
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const err = error as any;
+    console.error("[saveUserTokens] Database error - Details:", {
       name: error instanceof Error ? error.name : "Unknown",
       message: error instanceof Error ? error.message : String(error),
-      code: (error as unknown as { code?: string })?.code,
-      detail: (error as unknown as { detail?: string })?.detail,
-      constraint: (error as unknown as { constraint?: string })?.constraint,
+      // PostgreSQL error properties (may be on error or error.cause)
+      code: err?.code,
+      detail: err?.detail,
+      constraint: err?.constraint,
+      column: err?.column,
+      table: err?.table,
+      // Drizzle may wrap the error
+      cause: err?.cause,
+      causeCode: err?.cause?.code,
+      causeDetail: err?.cause?.detail,
+      causeMessage: err?.cause?.message,
+      // Stack trace
+      stack: error instanceof Error ? error.stack : undefined,
     });
+
+    // Also try to stringify the entire error
+    try {
+      console.error(
+        "[saveUserTokens] Database error - JSON:",
+        JSON.stringify(error, Object.getOwnPropertyNames(error as object), 2),
+      );
+    } catch {
+      console.error("[saveUserTokens] Could not stringify error");
+    }
+
     throw error;
   }
 }
