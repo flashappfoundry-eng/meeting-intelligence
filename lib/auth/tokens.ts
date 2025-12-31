@@ -80,23 +80,19 @@ export async function saveUserTokens(
   const encryptedAccess = encryptToken(tokens.access_token);
   const encryptedRefresh = tokens.refresh_token ? encryptToken(tokens.refresh_token) : null;
 
-  await db
-    .insert(oauthTokens)
-    .values({
-      userId: userUuid,
-      provider: platform,
-      providerUserId: platformUserId ?? null,
-      providerEmail: platformEmail ?? null,
-      accessToken: encryptedAccess,
-      refreshToken: encryptedRefresh,
-      tokenType: tokens.token_type ?? null,
-      scope: scopeString,
-      expiresAt,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [oauthTokens.userId, oauthTokens.provider],
-      set: {
+  console.log("[saveUserTokens] Attempting upsert:", {
+    userUuid,
+    platform,
+    hasAccessToken: !!encryptedAccess,
+    hasRefreshToken: !!encryptedRefresh,
+  });
+
+  try {
+    await db
+      .insert(oauthTokens)
+      .values({
+        userId: userUuid,
+        provider: platform,
         providerUserId: platformUserId ?? null,
         providerEmail: platformEmail ?? null,
         accessToken: encryptedAccess,
@@ -105,8 +101,32 @@ export async function saveUserTokens(
         scope: scopeString,
         expiresAt,
         updatedAt: new Date(),
-      },
+      })
+      .onConflictDoUpdate({
+        target: [oauthTokens.userId, oauthTokens.provider],
+        set: {
+          providerUserId: platformUserId ?? null,
+          providerEmail: platformEmail ?? null,
+          accessToken: encryptedAccess,
+          refreshToken: encryptedRefresh,
+          tokenType: tokens.token_type ?? null,
+          scope: scopeString,
+          expiresAt,
+          updatedAt: new Date(),
+        },
+      });
+
+    console.log("[saveUserTokens] Success!");
+  } catch (error) {
+    console.error("[saveUserTokens] Database error:", {
+      name: error instanceof Error ? error.name : "Unknown",
+      message: error instanceof Error ? error.message : String(error),
+      code: (error as unknown as { code?: string })?.code,
+      detail: (error as unknown as { detail?: string })?.detail,
+      constraint: (error as unknown as { constraint?: string })?.constraint,
     });
+    throw error;
+  }
 }
 
 // Back-compat helper for route handlers that use the simpler name.
