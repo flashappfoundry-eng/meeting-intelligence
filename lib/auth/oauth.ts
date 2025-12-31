@@ -191,6 +191,14 @@ export async function exchangeCodeForTokens(
     body.set("client_secret", cfg.clientSecret);
   }
 
+  console.log("[OAuth] Token exchange request:", {
+    platform,
+    tokenUrl: cfg.tokenUrl,
+    redirectUri: cfg.redirectUri,
+    hasCode: !!code,
+    hasCodeVerifier: !!codeVerifier,
+  });
+
   const res = await fetch(cfg.tokenUrl, {
     method: "POST",
     headers,
@@ -199,9 +207,12 @@ export async function exchangeCodeForTokens(
 
   const text = await res.text();
   if (!res.ok) {
-    throw new Error(
-      `${platform} token exchange failed (${res.status}): ${text || res.statusText}`,
-    );
+    console.error("[OAuth] Token exchange failed:", {
+      status: res.status,
+      statusText: res.statusText,
+      error: text || res.statusText,
+    });
+    throw new Error(`Token exchange failed: ${text || res.statusText}`);
   }
 
   const json = JSON.parse(text) as OAuthTokenResponse;

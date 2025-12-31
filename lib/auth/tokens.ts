@@ -109,6 +109,28 @@ export async function saveUserTokens(
     });
 }
 
+// Back-compat helper for route handlers that use the simpler name.
+export async function saveTokens(
+  userId: string,
+  platform: OAuthPlatform,
+  tokens: OAuthTokenResponse,
+) {
+  return saveUserTokens(
+    userId,
+    platform,
+    {
+      access_token: tokens.access_token,
+      refresh_token: tokens.refresh_token,
+      expires_in: tokens.expires_in,
+      token_type: tokens.token_type,
+      scope: tokens.scope,
+    },
+    undefined,
+    undefined,
+    tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : undefined,
+  );
+}
+
 export async function refreshTokenIfNeeded(
   userId: string,
   platform: OAuthPlatform,

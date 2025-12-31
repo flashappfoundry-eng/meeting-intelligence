@@ -1,69 +1,79 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
-
 import { exchangeCodeForTokens } from "@/lib/auth/oauth";
-import { saveUserTokens } from "@/lib/auth/tokens";
+import { saveTokens } from "@/lib/auth/tokens";
 
 export async function GET(request: Request) {
-  const url = new URL(request.url);
-  const code = url.searchParams.get("code");
-  const state = url.searchParams.get("state");
-  const providerError = url.searchParams.get("error");
+  const { searchParams } = new URL(request.url);
+  const code = searchParams.get("code");
+  const state = searchParams.get("state");
+  const error = searchParams.get("error");
 
-  const errorUrl = new URL("/auth/zoom/error", request.url);
+  console.log("[Zoom Callback] Received:", {
+    hasCode: !!code,
+    hasState: !!state,
+    error,
+  });
 
-  if (providerError) {
-    errorUrl.searchParams.set("error", providerError);
-    return NextResponse.redirect(errorUrl);
+  if (error) {
+    console.error("[Zoom Callback] OAuth error from Zoom:", error);
+    return NextResponse.redirect(new URL(`/auth/error?error=${error}`, request.url));
   }
 
   if (!code || !state) {
-    errorUrl.searchParams.set("error", "missing_code_or_state");
-    return NextResponse.redirect(errorUrl);
+    console.error("[Zoom Callback] Missing code or state");
+    return NextResponse.redirect(new URL("/auth/error?error=missing_params", request.url));
   }
 
   const cookieStore = await cookies();
-  const codeVerifier = cookieStore.get("zoom_code_verifier")?.value ?? null;
-  const expectedState = cookieStore.get("zoom_oauth_state")?.value ?? null;
-  const userId = cookieStore.get("zoom_user_id")?.value ?? null;
+  const storedState = cookieStore.get("zoom_oauth_state")?.value;
+  const codeVerifier = cookieStore.get("zoom_code_verifier")?.value;
+  const userId = cookieStore.get("zoom_user_id")?.value;
 
-  if (!codeVerifier || !expectedState || !userId) {
-    errorUrl.searchParams.set("error", "missing_cookie_state");
-    return NextResponse.redirect(errorUrl);
+  console.log("[Zoom Callback] Cookie state:", {
+    hasStoredState: !!storedState,
+    hasCodeVerifier: !!codeVerifier,
+    hasUserId: !!userId,
+    stateMatch: state === storedState,
+  });
+
+  if (state !== storedState) {
+    console.error("[Zoom Callback] State mismatch:", {
+      received: state,
+      stored: storedState,
+    });
+    return NextResponse.redirect(new URL("/auth/error?error=invalid_state", request.url));
   }
 
-  if (state !== expectedState) {
-    errorUrl.searchParams.set("error", "state_mismatch");
-    return NextResponse.redirect(errorUrl);
+  if (!codeVerifier || !userId) {
+    console.error("[Zoom Callback] Missing session data");
+    return NextResponse.redirect(new URL("/auth/error?error=missing_session", request.url));
   }
 
   try {
+    console.log("[Zoom Callback] Exchanging code for tokens...");
+    console.log("[Zoom Callback] Using Client ID:", process.env.ZOOM_CLIENT_ID?.slice(0, 8) + "...");
+
     const tokens = await exchangeCodeForTokens("zoom", code, codeVerifier);
 
-    await saveUserTokens(
-      userId,
-      "zoom",
-      {
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_in: tokens.expires_in,
-        token_type: tokens.token_type,
-        scope: tokens.scope,
-      },
-      undefined,
-      undefined,
-      tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : undefined,
-    );
+    console.log("[Zoom Callback] Token exchange successful, saving tokens for user:", userId);
 
+    await saveTokens(userId, "zoom", tokens);
+
+    // Clean up cookies
     cookieStore.delete("zoom_code_verifier");
     cookieStore.delete("zoom_oauth_state");
     cookieStore.delete("zoom_user_id");
 
-    return NextResponse.redirect(new URL("/auth/zoom/success", request.url));
+    console.log("[Zoom Callback] Success! Redirecting to success page");
+    return NextResponse.redirect(new URL("/auth/success?platform=zoom", request.url));
   } catch (err) {
-    console.error("[zoom-oauth-callback] error", err);
-    errorUrl.searchParams.set("error", "tokenexchangefailed");
-    return NextResponse.redirect(errorUrl);
+    console.error("[Zoom Callback] Token exchange failed:", err);
+    console.error("[Zoom Callback] Error details:", {
+      message: err instanceof Error ? err.message : "Unknown",
+      stack: err instanceof Error ? err.stack : undefined,
+    });
+    return NextResponse.redirect(new URL("/auth/error?error=token_exchange_failed", request.url));
   }
 }
 
