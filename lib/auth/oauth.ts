@@ -104,9 +104,8 @@ export const oauthConfig: Record<OAuthPlatform, OAuthConfig> = {
     clientId: process.env.ZOOM_CLIENT_ID ?? "",
     clientSecret: process.env.ZOOM_CLIENT_SECRET ?? "",
     redirectUri: process.env.ZOOM_REDIRECT_URI ?? "",
-    // Minimal scopes for meeting listing + reading recording metadata.
-    // (Exact app scopes are configured in the Zoom Marketplace app settings.)
-    scopes: ["meeting:read", "recording:read"],
+    // UPDATED: Use exact scope names from Zoom Marketplace app
+    scopes: ["meeting:read:meeting", "cloud_recording:read:list_user_recordings"],
   },
   asana: {
     authUrl: "https://app.asana.com/-/oauth_authorize",
