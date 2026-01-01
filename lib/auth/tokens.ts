@@ -1,7 +1,7 @@
 import { and, eq } from "drizzle-orm";
 
 import { db } from "@/lib/db/client";
-import { oauthStates, oauthTokens, users } from "@/lib/db/schema";
+import { oauthStates, platformConnections, users } from "@/lib/db/schema";
 import { coerceUserIdToUuid } from "@/lib/auth/user-id";
 import {
   decryptToken,
@@ -26,6 +26,20 @@ function isExpiredOrNearExpiry(expiresAt: Date | null, skewMs: number) {
   return expiresAt.getTime() - nowMs() <= skewMs;
 }
 
+/**
+ * Map OAuthPlatform to platformCategory for the new schema
+ */
+function getPlatformCategory(platform: OAuthPlatform): "meetings" | "tasks" {
+  switch (platform) {
+    case "zoom":
+      return "meetings";
+    case "asana":
+      return "tasks";
+    default:
+      return "meetings";
+  }
+}
+
 export async function getUserTokens(userId: string, platform: OAuthPlatform) {
   const userUuid = coerceUserIdToUuid(userId);
 
@@ -35,12 +49,12 @@ export async function getUserTokens(userId: string, platform: OAuthPlatform) {
     return null;
   }
 
-  let rows: Array<typeof oauthTokens.$inferSelect>;
+  let rows: Array<typeof platformConnections.$inferSelect>;
   try {
     rows = await db
       .select()
-      .from(oauthTokens)
-      .where(and(eq(oauthTokens.userId, userUuid), eq(oauthTokens.provider, platform)))
+      .from(platformConnections)
+      .where(and(eq(platformConnections.userId, userUuid), eq(platformConnections.platform, platform)))
       .limit(1);
   } catch (e) {
     // If the DB is unreachable/misconfigured in local dev, behave as if no tokens exist.
@@ -94,13 +108,13 @@ export async function saveUserTokens(
     refreshTokenLength: encryptedRefresh?.length,
     accessTokenPreview: encryptedAccess?.substring(0, 50) + "...",
     expiresAt: expiresAt?.toISOString(),
-    hasProviderUserId: !!platformUserId,
-    hasProviderEmail: !!platformEmail,
+    hasPlatformUserId: !!platformUserId,
+    hasPlatformEmail: !!platformEmail,
   });
 
   try {
     // CRITICAL FIX: Create user record if it doesn't exist
-    // This satisfies the foreign key constraint on oauth_tokens.user_id
+    // This satisfies the foreign key constraint on platform_connections.user_id
     // Use a unique placeholder email based on userUuid to avoid email unique constraint conflicts
     const placeholderEmail = platformEmail || `${userUuid}@oauth.placeholder`;
     console.log("[saveUserTokens] Ensuring user exists:", { userUuid, placeholderEmail });
@@ -117,27 +131,30 @@ export async function saveUserTokens(
     console.log("[saveUserTokens] User ensured, now saving tokens");
 
     await db
-      .insert(oauthTokens)
+      .insert(platformConnections)
       .values({
         userId: userUuid,
-        provider: platform,
-        providerUserId: platformUserId ?? null,
-        providerEmail: platformEmail ?? null,
+        platform: platform,
+        platformCategory: getPlatformCategory(platform),
+        platformUserId: platformUserId ?? null,
+        platformEmail: platformEmail ?? null,
         accessToken: encryptedAccess,
         refreshToken: encryptedRefresh,
-        tokenType: tokens.token_type ?? null,
+        tokenType: tokens.token_type ?? "Bearer",
         scope: scopeString,
         expiresAt,
+        isDefault: true,
+        isActive: true,
         updatedAt: new Date(),
       })
       .onConflictDoUpdate({
-        target: [oauthTokens.userId, oauthTokens.provider],
+        target: [platformConnections.userId, platformConnections.platform],
         set: {
-          providerUserId: platformUserId ?? null,
-          providerEmail: platformEmail ?? null,
+          platformUserId: platformUserId ?? null,
+          platformEmail: platformEmail ?? null,
           accessToken: encryptedAccess,
           refreshToken: encryptedRefresh,
-          tokenType: tokens.token_type ?? null,
+          tokenType: tokens.token_type ?? "Bearer",
           scope: scopeString,
           expiresAt,
           updatedAt: new Date(),
@@ -294,5 +311,3 @@ export async function deleteExpiredOAuthStates(now = new Date()) {
   // Kept exported so we can add housekeeping later without API churn.
   void oauthStates;
 }
-
-

@@ -78,9 +78,9 @@ export async function POST(
 
     await db.insert(oauthStates).values({
       state,
-      provider: platformParam,
+      platform: platformParam,
       userId: userUuid,
-      redirectUri: redirectUrl,
+      redirectAfter: redirectUrl,
       codeVerifier,
       expiresAt,
     });
@@ -139,5 +139,3 @@ export async function POST(
     );
   }
 }
-
-

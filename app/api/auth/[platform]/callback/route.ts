@@ -46,9 +46,9 @@ export async function GET(
       .from(oauthStates)
       .where(
         and(
-          eq(oauthStates.provider, platformParam),
+          eq(oauthStates.platform, platformParam),
           eq(oauthStates.state, state),
-          isNull(oauthStates.consumedAt),
+          isNull(oauthStates.usedAt),
         ),
       )
       .limit(1);
@@ -90,8 +90,8 @@ export async function GET(
 
     await db.delete(oauthStates).where(eq(oauthStates.id, record.id));
 
-    const successUrl = record.redirectUri?.trim()
-      ? record.redirectUri
+    const successUrl = record.redirectAfter?.trim()
+      ? record.redirectAfter
       : new URL(`/auth/${platformParam}/success`, req.url).toString();
 
     return NextResponse.redirect(successUrl);
@@ -104,5 +104,3 @@ export async function GET(
     return NextResponse.redirect(errorUrl);
   }
 }
-
-

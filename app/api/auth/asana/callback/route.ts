@@ -47,9 +47,9 @@ export async function GET(req: NextRequest) {
       .from(oauthStates)
       .where(
         and(
-          eq(oauthStates.provider, "asana"),
+          eq(oauthStates.platform, "asana"),
           eq(oauthStates.state, state),
-          isNull(oauthStates.consumedAt),
+          isNull(oauthStates.usedAt),
         ),
       )
       .limit(1);
@@ -98,8 +98,8 @@ export async function GET(req: NextRequest) {
 
     await db.delete(oauthStates).where(eq(oauthStates.id, record.id));
 
-    const successUrl = record.redirectUri?.trim()
-      ? record.redirectUri
+    const successUrl = record.redirectAfter?.trim()
+      ? record.redirectAfter
       : new URL("/auth/asana/success", req.url).toString();
 
     return NextResponse.redirect(successUrl);
@@ -109,5 +109,3 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(errorUrl);
   }
 }
-
-
