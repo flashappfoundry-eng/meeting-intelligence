@@ -19,15 +19,15 @@ export async function GET(request: Request) {
     // Derive from headers - same logic as MCP endpoint
     // This ensures ChatGPT OAuth uses the same user ID as MCP requests
     userId = deriveUserIdFromHeaders(request.headers);
-    console.log("[Zoom OAuth] Derived userId from headers:", userId);
+    console.log("[Asana OAuth] Derived userId from headers:", userId);
   } else {
-    console.log("[Zoom OAuth] Using userId from URL parameter:", userId);
+    console.log("[Asana OAuth] Using userId from URL parameter:", userId);
   }
 
   if (!userId || userId === "anonymous-user") {
-    console.error("[Zoom OAuth] Could not determine user ID");
+    console.error("[Asana OAuth] Could not determine user ID");
     console.error(
-      "[Zoom OAuth] Headers:",
+      "[Asana OAuth] Headers:",
       Object.fromEntries(request.headers.entries()),
     );
     return NextResponse.json(
@@ -45,7 +45,7 @@ export async function GET(request: Request) {
 
   const cookieStore = await cookies();
 
-  cookieStore.set("zoom_code_verifier", codeVerifier, {
+  cookieStore.set("asana_code_verifier", codeVerifier, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -53,7 +53,7 @@ export async function GET(request: Request) {
     path: "/",
   });
 
-  cookieStore.set("zoom_oauth_state", state, {
+  cookieStore.set("asana_oauth_state", state, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -61,7 +61,7 @@ export async function GET(request: Request) {
     path: "/",
   });
 
-  cookieStore.set("zoom_user_id", userId, {
+  cookieStore.set("asana_user_id", userId, {
     httpOnly: true,
     secure: process.env.NODE_ENV === "production",
     sameSite: "lax",
@@ -70,15 +70,14 @@ export async function GET(request: Request) {
   });
 
   const authUrl = buildAuthUrl({
-    platform: "zoom",
+    platform: "asana",
     state,
     codeChallenge,
     userId,
   });
 
-  console.log("[Zoom OAuth] Redirecting to Zoom with userId:", userId);
+  console.log("[Asana OAuth] Redirecting to Asana with userId:", userId);
 
   return NextResponse.redirect(authUrl);
 }
-
 
