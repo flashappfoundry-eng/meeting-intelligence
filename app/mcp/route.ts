@@ -301,10 +301,35 @@ export async function POST(req: Request) {
   const url = new URL(req.url);
   const baseUrl = `${url.origin}/mcp`;
 
+  // === MCP Request Logging (for debugging ChatGPT OAuth flow) ===
+  const headersObj = Object.fromEntries(req.headers.entries());
+  console.log("[MCP] === New Request ===");
+  console.log("[MCP] All headers:", JSON.stringify(headersObj, null, 2));
+
   // ChatGPT MCP client won't forward arbitrary custom headers like x-user-id.
   // Prefer x-user-id if provided, otherwise derive a stable fallback identity
   // from OpenAI-specific headers or a deterministic hash of request traits.
-  const userId = deriveUserIdFromHeaders(req.headers);
+  const derivedUserId = deriveUserIdFromHeaders(req.headers);
+  console.log("[MCP] Derived userId:", derivedUserId);
+
+  // Log specific headers we care about
+  console.log("[MCP] Specific headers:", {
+    "x-user-id": req.headers.get("x-user-id"),
+    "x-openai-user-id": req.headers.get("x-openai-user-id"),
+    "x-openai-sub": req.headers.get("x-openai-sub"),
+    "x-openai-conversation-id": req.headers.get("x-openai-conversation-id"),
+  });
+
+  // Check if tokens exist for this derived user
+  const zoomTokens = await getUserTokens(derivedUserId, "zoom");
+  const asanaTokens = await getUserTokens(derivedUserId, "asana");
+  console.log("[MCP] Token status:", {
+    derivedUserId,
+    hasZoomTokens: !!zoomTokens,
+    hasAsanaTokens: !!asanaTokens,
+  });
+
+  const userId = derivedUserId;
   const server = createServer(baseUrl, userId);
 
   // Official MCP transport for Web Standard Request/Response.
