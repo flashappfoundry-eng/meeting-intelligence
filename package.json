@@ -6,6 +6,7 @@
     "dev": "next dev",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
+    "db:migrate-v1": "npx tsx lib/db/migrate-from-v1.ts",
     "db:studio": "drizzle-kit studio",
     "build": "next build",
     "start": "next start",
