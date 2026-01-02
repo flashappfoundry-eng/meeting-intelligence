@@ -4,17 +4,20 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "db:generate": "drizzle-kit generate",
-    "db:migrate": "drizzle-kit migrate",
-    "db:migrate-v1": "npx tsx lib/db/migrate-from-v1.ts",
-    "db:studio": "drizzle-kit studio",
-    "auth:generate-keys": "npx tsx scripts/generate-jwt-keys.ts",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "db:migrate-v1": "npx tsx lib/db/migrate-from-v1.ts",
+    "auth:generate-keys": "npx tsx scripts/generate-jwt-keys.ts",
+    "setup:check": "npx tsx scripts/setup-check.ts",
+    "setup:register-chatgpt": "npx tsx scripts/register-chatgpt-client.ts"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.25.1",
+    "@neondatabase/serverless": "^0.10.4",
     "@openai/apps-sdk-ui": "^0.2.1",
     "@tanstack/react-query": "^5.90.15",
     "@vercel/postgres": "^0.10.0",
