@@ -63,16 +63,30 @@ async function getPublicKey(): Promise<PublicKey> {
   if (cachedPublicKey) return cachedPublicKey;
   
   const publicKeyPem = process.env.JWT_PUBLIC_KEY;
+  
   if (!publicKeyPem) {
+    console.error("[JWT] JWT_PUBLIC_KEY is not set");
     throw new Error(
       "JWT_PUBLIC_KEY environment variable is not set. " +
       "Generate keys with: npm run auth:generate-keys"
     );
   }
   
+  console.log("[JWT] Loading public key, length:", publicKeyPem.length);
+  
+  // Handle escaped newlines in environment variables
   const formattedKey = publicKeyPem.replace(/\\n/g, "\n");
-  cachedPublicKey = await importSPKI(formattedKey, "RS256");
-  return cachedPublicKey;
+  
+  console.log("[JWT] Formatted key starts with:", formattedKey.substring(0, 30));
+  
+  try {
+    cachedPublicKey = await importSPKI(formattedKey, "RS256");
+    console.log("[JWT] Public key loaded successfully");
+    return cachedPublicKey;
+  } catch (error) {
+    console.error("[JWT] Failed to import public key:", error);
+    throw error;
+  }
 }
 
 /**
@@ -108,19 +122,27 @@ export async function generateKeyPairForSetup(): Promise<{
  * ChatGPT uses this to verify tokens issued by this app
  */
 export async function getJWKS(): Promise<{ keys: object[] }> {
-  const publicKey = await getPublicKey();
-  const jwk = await exportJWK(publicKey);
-  
-  return {
-    keys: [
-      {
-        ...jwk,
-        kid: KEY_ID,
-        use: "sig",
-        alg: "RS256",
-      },
-    ],
-  };
+  try {
+    const publicKey = await getPublicKey();
+    const jwk = await exportJWK(publicKey);
+    
+    const keyId = process.env.JWT_KEY_ID || "meeting-intel-key-1";
+    
+    return {
+      keys: [
+        {
+          ...jwk,
+          kid: keyId,
+          use: "sig",
+          alg: "RS256",
+        },
+      ],
+    };
+  } catch (error) {
+    console.error("[JWT] Error in getJWKS:", error);
+    // Return empty keys array on error (endpoint already handles logging)
+    return { keys: [] };
+  }
 }
 
 // ============================================
