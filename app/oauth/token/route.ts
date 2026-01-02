@@ -41,7 +41,14 @@ export async function POST(request: Request) {
   
   const grantType = params.get("grant_type");
   
-  console.log("[OAuth Token] Request received:", { grantType });
+  console.log("[OAuth Token] Request received:", { 
+    grant_type: grantType,
+    has_code: !!params.get("code"),
+    has_client_id: !!params.get("client_id"),
+    has_redirect_uri: !!params.get("redirect_uri"),
+    has_code_verifier: !!params.get("code_verifier"),
+    has_refresh_token: !!params.get("refresh_token"),
+  });
   
   switch (grantType) {
     case "authorization_code":

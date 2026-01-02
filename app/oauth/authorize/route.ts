@@ -46,26 +46,29 @@ export async function GET(request: Request) {
   const codeChallengeMethod = params.get("code_challenge_method") || "S256";
   const nonce = params.get("nonce"); // OpenID Connect
   
-  console.log("[OAuth Authorize] Request received:", {
-    clientId,
-    redirectUri: redirectUri?.substring(0, 50),
-    responseType,
+  // Add debug logging with standard OAuth parameter names
+  console.log("[OAuth Authorize] Received params:", {
+    client_id: clientId,
+    redirect_uri: redirectUri ? redirectUri.substring(0, 50) + '...' : null,
+    response_type: responseType,
     scope,
-    hasState: !!state,
-    hasCodeChallenge: !!codeChallenge,
+    state: state ? "present" : "missing",
+    code_challenge: codeChallenge ? "present" : "missing",
+    code_challenge_method: codeChallengeMethod,
   });
   
   // ============================================
   // VALIDATE REQUIRED PARAMETERS
   // ============================================
   
-  // Check response_type
+  // Validate response_type FIRST with clear logging
   if (responseType !== "code") {
+    console.error("[OAuth Authorize] Invalid response_type:", responseType);
     return errorResponse(
       redirectUri,
       state,
       "unsupported_response_type",
-      "Only response_type=code is supported"
+      `Only response_type=code is supported. Received: ${responseType}`
     );
   }
   
