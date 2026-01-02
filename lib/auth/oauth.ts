@@ -104,11 +104,18 @@ export const oauthConfig: Record<OAuthPlatform, OAuthConfig> = {
     clientId: process.env.ZOOM_CLIENT_ID ?? "",
     clientSecret: process.env.ZOOM_CLIENT_SECRET ?? "",
     redirectUri: process.env.ZOOM_REDIRECT_URI ?? "",
-    // UPDATED: Use exact scope names from Zoom Marketplace app
+    // Scopes required for Meeting Intelligence
+    // IMPORTANT: These must be enabled in the Zoom Marketplace app settings:
+    // https://marketplace.zoom.us/develop/apps → Your App → Scopes
     scopes: [
+      // User info - required for /users/me
+      "user:read:user",
+      // Meetings - required for /users/me/meetings
+      "meeting:read:list_meetings",
       "meeting:read:meeting",
+      // Cloud recordings - for transcripts (future)
       "cloud_recording:read:list_user_recordings",
-      "cloud_recording:read:recording", // For transcript download
+      "cloud_recording:read:recording",
     ],
   },
   asana: {
