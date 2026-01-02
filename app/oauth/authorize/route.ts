@@ -30,8 +30,20 @@ const VALID_SCOPES = new Set([
  * 4. After auth, user is redirected back to ChatGPT with an auth code
  */
 export async function GET(request: Request) {
+  // ============================================
+  // RAW DEBUG - Log everything before any processing
+  // ============================================
+  const rawUrl = request.url;
+  console.log("[OAuth Authorize] === RAW REQUEST DEBUG ===");
+  console.log("[OAuth Authorize] Full URL:", rawUrl);
+  console.log("[OAuth Authorize] URL search:", new URL(rawUrl).search);
+  
   const url = new URL(request.url);
   const params = url.searchParams;
+  
+  console.log("[OAuth Authorize] All params:", Object.fromEntries(params.entries()));
+  console.log("[OAuth Authorize] response_type raw:", params.get("response_type"));
+  console.log("[OAuth Authorize] response_type has value:", params.has("response_type"));
   
   // ============================================
   // EXTRACT PARAMETERS
@@ -49,7 +61,7 @@ export async function GET(request: Request) {
   // Add debug logging with standard OAuth parameter names
   console.log("[OAuth Authorize] Received params:", {
     client_id: clientId,
-    redirect_uri: redirectUri ? redirectUri.substring(0, 50) + '...' : null,
+    redirect_uri: redirectUri ? redirectUri.substring(0, 50) + "..." : null,
     response_type: responseType,
     scope,
     state: state ? "present" : "missing",
