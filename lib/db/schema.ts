@@ -174,9 +174,9 @@ export const oauthAuthorizationCodes = pgTable("oauth_authorization_codes", {
   redirectUri: text("redirect_uri").notNull(),
   scope: text("scope").notNull(),
   
-  // PKCE (required for OAuth 2.1)
-  codeChallenge: varchar("code_challenge", { length: 256 }).notNull(),
-  codeChallengeMethod: varchar("code_challenge_method", { length: 10 }).notNull().default("S256"),
+  // PKCE (optional for public clients)
+  codeChallenge: varchar("code_challenge", { length: 256 }),
+  codeChallengeMethod: varchar("code_challenge_method", { length: 10 }).default("S256"),
   
   // OpenID Connect
   nonce: varchar("nonce", { length: 256 }),

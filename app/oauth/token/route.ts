@@ -74,8 +74,9 @@ async function handleAuthorizationCode(params: URLSearchParams) {
     return tokenError("invalid_request", "Missing required parameters: code, redirect_uri, client_id");
   }
   
+  // PKCE code_verifier is optional for public clients
   if (!codeVerifier) {
-    return tokenError("invalid_request", "Missing required parameter: code_verifier (PKCE)");
+    console.log("[OAuth Token] No code_verifier provided - proceeding without PKCE");
   }
   
   // Find the authorization code
@@ -103,10 +104,16 @@ async function handleAuthorizationCode(params: URLSearchParams) {
     return tokenError("invalid_grant", "Redirect URI mismatch");
   }
   
-  // Validate PKCE code verifier
-  if (!verifyCodeChallenge(codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod as "S256" | "plain")) {
-    console.log("[OAuth Token] Invalid code_verifier");
-    return tokenError("invalid_grant", "Invalid code_verifier");
+  // Validate PKCE code verifier only if code_challenge was provided during authorization
+  if (authCode.codeChallenge && codeVerifier) {
+    if (!verifyCodeChallenge(codeVerifier, authCode.codeChallenge, authCode.codeChallengeMethod as "S256" | "plain")) {
+      console.log("[OAuth Token] Invalid code_verifier");
+      return tokenError("invalid_grant", "Invalid code_verifier");
+    }
+  } else if (authCode.codeChallenge && !codeVerifier) {
+    // PKCE was used during auth but verifier not provided
+    console.log("[OAuth Token] code_challenge was set but code_verifier not provided");
+    return tokenError("invalid_grant", "code_verifier required when code_challenge was used");
   }
   
   // Mark code as used (one-time use)

@@ -258,8 +258,8 @@ async function autoApprove(
     clientId: string;
     redirectUri: string;
     scope: string;
-    codeChallenge: string;
-    codeChallengeMethod: string;
+    codeChallenge?: string;
+    codeChallengeMethod?: string;
     nonce?: string;
     state?: string;
   },

@@ -99,17 +99,10 @@ export async function GET(request: Request) {
     }, { status: 400 });
   }
   
-  // PKCE is required for OAuth 2.1
+  // PKCE is recommended but optional for public clients (ChatGPT doesn't always send it)
   if (!codeChallenge) {
-    return errorResponse(
-      redirectUri,
-      state,
-      "invalid_request",
-      "PKCE code_challenge is required"
-    );
-  }
-  
-  if (codeChallengeMethod !== "S256") {
+    console.log("[OAuth Authorize] PKCE not provided - proceeding without (public client)");
+  } else if (codeChallengeMethod !== "S256") {
     return errorResponse(
       redirectUri,
       state,
