@@ -86,6 +86,7 @@ export async function generateKeyPairForSetup(): Promise<{
 }> {
   const { privateKey, publicKey } = await generateKeyPair("RS256", {
     modulusLength: 2048,
+    extractable: true,
   });
   
   // Export as PEM format
