@@ -65,20 +65,30 @@ const TOOLS = {
   },
 };
 
+// CORS headers for all responses
+const CORS_HEADERS = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "Content-Type, Authorization, x-user-id",
+};
+
 /**
  * MCP Health Check
  */
 export async function GET() {
   return NextResponse.json({
-    status: "ok",
-    service: "meeting-intelligence-mcp",
+    name: "meeting-intelligence",
     version: "2.0.0",
+    status: "healthy",
+    service: "meeting-intelligence-mcp",
     timestamp: new Date().toISOString(),
     endpoints: {
       mcp: `${BASE_URL}/mcp`,
       oauth: `${BASE_URL}/.well-known/oauth-protected-resource`,
       openid: `${BASE_URL}/.well-known/openid-configuration`,
     },
+  }, {
+    headers: CORS_HEADERS,
   });
 }
 
@@ -416,15 +426,11 @@ function getToolInputSchema(toolName: string): object {
 }
 
 /**
- * CORS headers for MCP endpoint
+ * CORS preflight handler
  */
 export async function OPTIONS() {
   return new Response(null, {
     status: 200,
-    headers: {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type, Authorization",
-    },
+    headers: CORS_HEADERS,
   });
 }
