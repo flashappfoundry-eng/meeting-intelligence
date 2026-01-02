@@ -1,106 +1,77 @@
-import { and, eq, isNull } from "drizzle-orm";
-import type { NextRequest } from "next/server";
+// app/api/auth/[platform]/callback/route.ts
+/**
+ * Handle platform OAuth callback
+ */
+
 import { NextResponse } from "next/server";
+import {
+  exchangePlatformCode,
+  fetchPlatformUserInfo,
+  storePlatformConnection,
+  type Platform,
+} from "@/lib/auth/platform-oauth";
 
-import { exchangeCodeForTokens, type OAuthPlatform } from "@/lib/auth/oauth";
-import { saveUserTokens } from "@/lib/auth/tokens";
-import { db } from "@/lib/db/client";
-import { oauthStates } from "@/lib/db/schema";
-
-function isPlatform(x: string): x is OAuthPlatform {
-  return x === "zoom" || x === "asana";
-}
+const SUPPORTED_PLATFORMS = new Set(["zoom", "asana", "teams"]);
+const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "https://meeting-intelligence-beryl.vercel.app";
 
 export async function GET(
-  req: NextRequest,
-  context: { params: Promise<{ platform: string }> },
+  request: Request,
+  { params }: { params: Promise<{ platform: string }> }
 ) {
-  const { platform: platformParam } = await context.params;
-
-  const fallbackErrorRedirect = new URL("/", req.url);
-  fallbackErrorRedirect.searchParams.set("error", "oauth_callback_failed");
-
-  if (!isPlatform(platformParam)) {
-    return NextResponse.redirect(fallbackErrorRedirect);
+  const { platform } = await params;
+  const url = new URL(request.url);
+  
+  // Validate platform
+  if (!SUPPORTED_PLATFORMS.has(platform)) {
+    return NextResponse.redirect(
+      new URL(`/auth/error?error=unsupported_platform&platform=${platform}`, BASE_URL)
+    );
   }
-
-  const errorUrl = new URL(`/auth/${platformParam}/error`, req.url);
-
+  
+  // Extract OAuth response
+  const code = url.searchParams.get("code");
+  const state = url.searchParams.get("state");
+  const error = url.searchParams.get("error");
+  const errorDescription = url.searchParams.get("error_description");
+  
+  // Handle errors
+  if (error) {
+    console.error(`[Platform Callback ${platform}] OAuth error:`, error, errorDescription);
+    return NextResponse.redirect(
+      new URL(`/auth/error?platform=${platform}&error=${error}&description=${encodeURIComponent(errorDescription || "")}`, BASE_URL)
+    );
+  }
+  
+  if (!code || !state) {
+    return NextResponse.redirect(
+      new URL(`/auth/error?platform=${platform}&error=missing_params`, BASE_URL)
+    );
+  }
+  
   try {
-    const url = new URL(req.url);
-    const code = url.searchParams.get("code");
-    const state = url.searchParams.get("state");
-    const error = url.searchParams.get("error");
-
-    if (error) {
-      errorUrl.searchParams.set("error", error);
-      return NextResponse.redirect(errorUrl);
-    }
-    if (!code || !state) {
-      errorUrl.searchParams.set("error", "Missing code or state");
-      return NextResponse.redirect(errorUrl);
-    }
-
-    const rows = await db
-      .select()
-      .from(oauthStates)
-      .where(
-        and(
-          eq(oauthStates.platform, platformParam),
-          eq(oauthStates.state, state),
-          isNull(oauthStates.usedAt),
-        ),
-      )
-      .limit(1);
-
-    const record = rows[0];
-    if (!record) {
-      errorUrl.searchParams.set("error", "Invalid state");
-      return NextResponse.redirect(errorUrl);
-    }
-    if (record.expiresAt.getTime() < Date.now()) {
-      errorUrl.searchParams.set("error", "State expired");
-      return NextResponse.redirect(errorUrl);
-    }
-    if (!record.userId) {
-      errorUrl.searchParams.set("error", "State missing user");
-      return NextResponse.redirect(errorUrl);
-    }
-    if (!record.codeVerifier) {
-      errorUrl.searchParams.set("error", "State missing code_verifier");
-      return NextResponse.redirect(errorUrl);
-    }
-
-    const tokens = await exchangeCodeForTokens(platformParam, code, record.codeVerifier);
-
-    await saveUserTokens(
-      record.userId,
-      platformParam,
-      {
-        access_token: tokens.access_token,
-        refresh_token: tokens.refresh_token,
-        expires_in: tokens.expires_in,
-        token_type: tokens.token_type,
-        scope: tokens.scope,
-      },
-      undefined,
-      undefined,
-      tokens.scope ? tokens.scope.split(/\s+/).filter(Boolean) : undefined,
+    // Exchange code for tokens
+    console.log(`[Platform Callback ${platform}] Exchanging code for tokens`);
+    const { tokens, userId } = await exchangePlatformCode(platform as Platform, code, state);
+    
+    // Fetch user info
+    console.log(`[Platform Callback ${platform}] Fetching user info`);
+    const userInfo = await fetchPlatformUserInfo(platform as Platform, tokens.access_token);
+    
+    // Store connection
+    console.log(`[Platform Callback ${platform}] Storing connection for user ${userId}`);
+    await storePlatformConnection(userId, platform as Platform, tokens, userInfo);
+    
+    // Success - redirect to success page or close window
+    return NextResponse.redirect(
+      new URL(`/auth/success?platform=${platform}`, BASE_URL)
     );
-
-    await db.delete(oauthStates).where(eq(oauthStates.id, record.id));
-
-    const successUrl = record.redirectAfter?.trim()
-      ? record.redirectAfter
-      : new URL(`/auth/${platformParam}/success`, req.url).toString();
-
-    return NextResponse.redirect(successUrl);
+    
   } catch (err) {
-    console.error("OAuth callback error", err);
-    errorUrl.searchParams.set(
-      "error",
-      "OAuth callback failed. Please try connecting again.",
+    console.error(`[Platform Callback ${platform}] Error:`, err);
+    
+    const message = err instanceof Error ? err.message : "Unknown error";
+    return NextResponse.redirect(
+      new URL(`/auth/error?platform=${platform}&error=exchange_failed&description=${encodeURIComponent(message)}`, BASE_URL)
     );
-    return NextResponse.redirect(errorUrl);
   }
 }
