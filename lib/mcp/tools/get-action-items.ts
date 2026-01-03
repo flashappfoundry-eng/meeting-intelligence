@@ -19,10 +19,16 @@ import {
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "https://meeting-intelligence-beryl.vercel.app";
 
+// MCP Tool response type
+interface MCPToolResponse {
+  content: Array<{ type: string; text: string }>;
+  _meta?: Record<string, unknown>;
+}
+
 export async function handleGetActionItems(
   user: AuthenticatedUser,
   args: Record<string, unknown>
-) {
+): Promise<MCPToolResponse> {
   const meetingId = args.meetingId as string | undefined;
   const transcript = args.transcript as string | undefined;
   
@@ -55,7 +61,7 @@ export async function handleGetActionItems(
     const zoomResult = await fetchZoomTranscript(user, meetingId);
     
     if (!zoomResult.success) {
-      return zoomResult.response;
+      return zoomResult.response!;
     }
     
     plainTranscript = zoomResult.transcript!;
@@ -191,7 +197,7 @@ async function fetchZoomTranscript(
   transcript?: string;
   meetingTopic?: string;
   meetingDate?: string;
-  response?: ReturnType<typeof handleGetActionItems>;
+  response?: MCPToolResponse;
 }> {
   // Get Zoom tokens
   let tokens = await getUserTokens(user.id, "zoom");
