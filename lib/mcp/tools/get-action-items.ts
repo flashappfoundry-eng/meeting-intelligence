@@ -126,7 +126,14 @@ export async function handleGetActionItems(
     });
     
     console.log("[getActionItems] Found", result.count, "action items");
-    console.log("[getActionItems] ====== SUCCESS ======");
+    
+    // Log each item with priority for debugging
+    console.log("[getActionItems] ====== ACTION ITEMS WITH PRIORITIES ======");
+    result.actionItems.forEach((item, i) => {
+      console.log(`[getActionItems] ${i + 1}. "${item.title}"`);
+      console.log(`[getActionItems]    Priority: ${item.priority} | Assignee: ${item.assignee || '(none)'} | Due: ${item.dueDate || '(none)'}`);
+    });
+    console.log("[getActionItems] ====== END ITEMS ======");
     
     // Construct output matching GetActionItemsOutput schema
     const outputData: GetActionItemsOutput = {
@@ -136,6 +143,8 @@ export async function handleGetActionItems(
       actionItems: result.actionItems,
       extractedAt: new Date().toISOString(),
     };
+    
+    console.log("[getActionItems] ====== SUCCESS ======");
     
     if (result.count === 0) {
       const message = meetingTopic 

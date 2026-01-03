@@ -408,13 +408,19 @@ function getToolInputSchema(toolName: string): object {
             items: {
               type: "object",
               properties: {
-                title: { type: "string" },
-                assignee: { type: "string" },
-                dueDate: { type: "string" },
+                title: { type: "string", description: "Task title/description" },
+                assignee: { type: "string", description: "Person responsible for the task" },
+                dueDate: { type: "string", description: "Due date (e.g., '2026-01-10', 'Friday', 'next week')" },
+                priority: { 
+                  type: "string", 
+                  enum: ["high", "medium", "low"],
+                  description: "Task priority - high for urgent/ASAP/blocking items, low for nice-to-have, medium for normal tasks"
+                },
+                context: { type: "string", description: "Additional context about the task" },
               },
               required: ["title"],
             },
-            description: "Action items to create as tasks",
+            description: "Action items to create as tasks. Include priority for each item!",
           },
           platform: {
             type: "string",
