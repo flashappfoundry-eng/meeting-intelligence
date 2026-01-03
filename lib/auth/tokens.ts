@@ -234,6 +234,30 @@ export async function refreshTokenIfNeeded(
     return tokens;
   }
 
+  console.log(`[refreshTokenIfNeeded] Token expired or near expiry for ${platform}, refreshing...`);
+  return forceRefreshToken(userId, platform, tokens);
+}
+
+/**
+ * Force refresh the token regardless of expiry time.
+ * Use this when you get a 401 from the API.
+ */
+export async function forceRefreshToken(
+  userId: string,
+  platform: OAuthPlatform,
+  tokens?: StoredUserTokens | null,
+): Promise<StoredUserTokens> {
+  console.log(`[forceRefreshToken] Force refreshing ${platform} token for user: ${userId}`);
+  
+  // If tokens not provided, fetch them
+  if (!tokens) {
+    tokens = await getUserTokens(userId, platform);
+  }
+  
+  if (!tokens) {
+    throw new Error(`No ${platform} tokens found for user ${userId}`);
+  }
+
   if (!tokens.refreshToken) {
     throw new Error(`${platform} access token expired and no refresh token is available.`);
   }
@@ -260,6 +284,8 @@ export async function refreshTokenIfNeeded(
     body.set("client_secret", clientSecret);
   }
 
+  console.log(`[forceRefreshToken] Calling ${cfg.tokenUrl}`);
+  
   const res = await fetch(cfg.tokenUrl, {
     method: "POST",
     headers,
@@ -267,7 +293,10 @@ export async function refreshTokenIfNeeded(
   });
 
   const text = await res.text();
+  console.log(`[forceRefreshToken] Response status: ${res.status}`);
+  
   if (!res.ok) {
+    console.error(`[forceRefreshToken] Refresh failed: ${text}`);
     throw new Error(`${platform} token refresh failed (${res.status}): ${text || res.statusText}`);
   }
 
@@ -275,6 +304,8 @@ export async function refreshTokenIfNeeded(
   if (!json.access_token) {
     throw new Error(`${platform} refresh response missing access_token`);
   }
+
+  console.log(`[forceRefreshToken] Got new access token, expires in ${json.expires_in}s`);
 
   const refreshed: StoredUserTokens = {
     accessToken: json.access_token,
@@ -297,6 +328,8 @@ export async function refreshTokenIfNeeded(
     undefined,
     undefined,
   );
+
+  console.log(`[forceRefreshToken] ✓ Tokens saved to database`);
 
   return refreshed;
 }

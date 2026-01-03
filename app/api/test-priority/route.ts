@@ -60,9 +60,9 @@ export async function GET(request: Request) {
     }
     steps.push({ step: 1, status: 'success', hasTokens: true });
     
-    // Step 2: Create Asana client
-    const asanaClient = createAsanaClient(tokens.accessToken);
-    steps.push({ step: 2, action: 'Created Asana client', status: 'success' });
+    // Step 2: Create Asana client with userId for auto-refresh on 401
+    const asanaClient = createAsanaClient(tokens.accessToken, userId);
+    steps.push({ step: 2, action: 'Created Asana client with auto-refresh', status: 'success' });
     
     // Step 2.5: Test raw custom field API call (for debugging)
     steps.push({ step: '2.5', action: 'Testing raw Asana custom field API' });

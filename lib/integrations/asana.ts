@@ -6,7 +6,10 @@
  * - Workspaces
  * - Projects
  * - Task creation with assignee resolution and priority custom fields
+ * - Automatic token refresh on 401
  */
+
+import { forceRefreshToken } from "@/lib/auth/tokens";
 
 export type AsanaAccessToken = string;
 
@@ -395,9 +398,18 @@ export function clearAsanaCaches(): void {
 // Client Factory
 // ============================================
 
-export function createAsanaClient(accessToken: AsanaAccessToken) {
+/**
+ * Create an Asana API client with automatic token refresh on 401
+ * @param accessToken - The current access token
+ * @param userId - Optional user ID for automatic token refresh on 401
+ */
+export function createAsanaClient(accessToken: AsanaAccessToken, userId?: string) {
+  // Make token mutable for refresh
+  let currentAccessToken = accessToken;
+  let hasAttemptedRefresh = false;
+  
   /**
-   * Make an authenticated request to Asana API
+   * Make an authenticated request to Asana API with auto-refresh on 401
    */
   async function asanaFetch<T>(
     path: string, 
@@ -406,17 +418,39 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
     const url = `${ASANA_API_BASE}${path}`;
     console.log(`[Asana API] ${init?.method || "GET"} ${path}`);
     
-    const res = await fetch(url, {
-      ...init,
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
-
-    const text = await res.text();
+    const makeRequest = async (token: string): Promise<Response> => {
+      return fetch(url, {
+        ...init,
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          ...(init?.headers ?? {}),
+        },
+      });
+    };
+    
+    let res = await makeRequest(currentAccessToken);
+    let text = await res.text();
+    
+    // If 401 and we have userId, try to refresh token and retry
+    if (res.status === 401 && userId && !hasAttemptedRefresh) {
+      console.log(`[Asana API] Got 401, attempting token refresh for user ${userId}...`);
+      hasAttemptedRefresh = true;
+      
+      try {
+        const refreshedTokens = await forceRefreshToken(userId, "asana");
+        currentAccessToken = refreshedTokens.accessToken;
+        console.log(`[Asana API] Token refreshed successfully, retrying request...`);
+        
+        // Retry the request with new token
+        res = await makeRequest(currentAccessToken);
+        text = await res.text();
+      } catch (refreshError) {
+        console.error(`[Asana API] Token refresh failed:`, refreshError);
+        // Fall through to return the original 401 error
+      }
+    }
     
     if (!res.ok) {
       console.error(`[Asana API] Error ${res.status}:`, text);
@@ -571,10 +605,10 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
       console.log(`[Asana API] Workspace GID: ${task.workspaceGid}`);
       console.log(`[Asana API] Project GID: ${task.projectGid}`);
       
-      // Resolve assignee name to GID
+      // Resolve assignee name to GID (use currentAccessToken which may have been refreshed)
       console.log(`[Asana API] Resolving assignee...`);
       const assigneeGid = task.assigneeName
-        ? await resolveAssigneeToGid(accessToken, task.workspaceGid, task.assigneeName)
+        ? await resolveAssigneeToGid(currentAccessToken, task.workspaceGid, task.assigneeName)
         : null;
       console.log(`[Asana API] Resolved assignee GID: ${assigneeGid || "(not resolved)"}`);
       
@@ -586,7 +620,7 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
         console.log(`[Asana API] Task priority: ${task.priority}`);
         console.log(`[Asana API] Looking up Priority custom field for project...`);
         
-        const priorityConfig = await getPriorityFieldConfig(accessToken, task.projectGid);
+        const priorityConfig = await getPriorityFieldConfig(currentAccessToken, task.projectGid);
         
         if (priorityConfig) {
           const enumOptionGid = priorityConfig.enumOptions[task.priority];
@@ -709,7 +743,14 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
      * Returns the field GID and enum option GIDs for high/medium/low
      */
     async getPriorityFieldConfig(projectGid: string): Promise<PriorityFieldConfig | null> {
-      return getPriorityFieldConfig(accessToken, projectGid);
+      return getPriorityFieldConfig(currentAccessToken, projectGid);
+    },
+    
+    /**
+     * Get the current access token (may have been refreshed)
+     */
+    getCurrentAccessToken(): string {
+      return currentAccessToken;
     },
 
     /**

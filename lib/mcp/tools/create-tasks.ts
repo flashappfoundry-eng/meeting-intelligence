@@ -123,7 +123,8 @@ export async function handleCreateTasks(
     // Refresh token if needed
     tokens = await refreshTokenIfNeeded(user.id, "asana", tokens);
     
-    const asana = createAsanaClient(tokens.accessToken);
+    // Create client with userId for auto-refresh on 401
+    const asana = createAsanaClient(tokens.accessToken, user.id);
     
     // Verify token works
     console.log("[createTasks] Verifying Asana connection...");
