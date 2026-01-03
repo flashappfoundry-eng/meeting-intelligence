@@ -233,65 +233,97 @@ async function getOrCreatePriorityTag(
   workspaceGid: string,
   priority: "high" | "medium" | "low"
 ): Promise<string | null> {
+  console.log(`[Asana] ====== GET/CREATE PRIORITY TAG ======`);
+  console.log(`[Asana] Priority: ${priority}`);
+  console.log(`[Asana] Workspace GID: ${workspaceGid}`);
+  
   const cacheKey = `${workspaceGid}:${priority}`;
   
   // Check cache first
   const cached = priorityTagsCache.get(cacheKey);
   if (cached) {
-    console.log(`[Asana] Using cached priority tag for ${priority}`);
+    console.log(`[Asana] ✓ Using cached priority tag: ${cached}`);
     return cached;
   }
 
   const tagName = PRIORITY_TAGS[priority];
-  console.log(`[Asana] Looking for priority tag "${tagName}" in workspace ${workspaceGid}`);
+  console.log(`[Asana] Tag name to find/create: "${tagName}"`);
 
   try {
-    // First, search for existing tag
-    const searchResponse = await fetch(
-      `${ASANA_API_BASE}/workspaces/${workspaceGid}/tags?opt_fields=name&limit=100`,
-      {
-        headers: { Authorization: `Bearer ${accessToken}` },
-      }
-    );
+    // First, search for existing tag in workspace
+    console.log(`[Asana] Searching for existing tags in workspace...`);
+    const searchUrl = `${ASANA_API_BASE}/workspaces/${workspaceGid}/tags?opt_fields=name,gid&limit=100`;
+    console.log(`[Asana] Search URL: ${searchUrl}`);
+    
+    const searchResponse = await fetch(searchUrl, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
 
-    if (searchResponse.ok) {
-      const { data } = await searchResponse.json();
-      const existingTag = (data as AsanaTag[]).find((t) => t.name === tagName);
+    console.log(`[Asana] Search response status: ${searchResponse.status}`);
+    
+    if (!searchResponse.ok) {
+      const errorText = await searchResponse.text();
+      console.error(`[Asana] ✗ Failed to search tags: ${searchResponse.status}`);
+      console.error(`[Asana] Error response: ${errorText}`);
+      // Continue to try creating the tag anyway
+    } else {
+      const searchData = await searchResponse.json();
+      const tags = searchData.data as AsanaTag[];
+      console.log(`[Asana] Found ${tags.length} tags in workspace`);
+      console.log(`[Asana] Available tags: ${tags.map(t => `"${t.name}"`).join(', ') || '(none)'}`);
+      
+      const existingTag = tags.find((t) => t.name === tagName);
       
       if (existingTag) {
-        console.log(`[Asana] Found existing priority tag: ${existingTag.gid}`);
+        console.log(`[Asana] ✓ Found existing priority tag: "${existingTag.name}" (${existingTag.gid})`);
         priorityTagsCache.set(cacheKey, existingTag.gid);
         return existingTag.gid;
       }
+      
+      console.log(`[Asana] Tag "${tagName}" not found among existing tags`);
     }
 
     // Tag not found, create it
-    console.log(`[Asana] Creating priority tag "${tagName}"`);
-    const createResponse = await fetch(
-      `${ASANA_API_BASE}/workspaces/${workspaceGid}/tags`,
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          data: { name: tagName },
-        }),
-      }
-    );
+    console.log(`[Asana] Creating new priority tag: "${tagName}"`);
+    
+    // Use the /tags endpoint with workspace in body (more reliable)
+    const createUrl = `${ASANA_API_BASE}/tags`;
+    const createBody = {
+      data: { 
+        name: tagName,
+        workspace: workspaceGid,  // IMPORTANT: Specify workspace in body
+      },
+    };
+    
+    console.log(`[Asana] Create URL: ${createUrl}`);
+    console.log(`[Asana] Create body: ${JSON.stringify(createBody)}`);
+    
+    const createResponse = await fetch(createUrl, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify(createBody),
+    });
+
+    console.log(`[Asana] Create response status: ${createResponse.status}`);
+    
+    const createData = await createResponse.json();
+    console.log(`[Asana] Create response data: ${JSON.stringify(createData)}`);
 
     if (createResponse.ok) {
-      const { data } = await createResponse.json();
-      console.log(`[Asana] Created priority tag: ${data.gid}`);
-      priorityTagsCache.set(cacheKey, data.gid);
-      return data.gid;
+      const newTag = createData.data;
+      console.log(`[Asana] ✓ Created new priority tag: "${newTag.name}" (${newTag.gid})`);
+      priorityTagsCache.set(cacheKey, newTag.gid);
+      return newTag.gid;
     }
 
-    console.warn(`[Asana] Failed to create priority tag: ${createResponse.status}`);
+    console.error(`[Asana] ✗ Failed to create priority tag: ${createResponse.status}`);
+    console.error(`[Asana] Error details: ${JSON.stringify(createData.errors || createData)}`);
     return null;
   } catch (error) {
-    console.warn("[Asana] Error managing priority tag:", error);
+    console.error(`[Asana] ✗ Exception in getOrCreatePriorityTag:`, error);
     return null;
   }
 }
@@ -489,13 +521,20 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
       console.log(`[Asana API] Resolved assignee GID: ${assigneeGid || "(not resolved)"}`);
       
       // Get priority tag GID
-      console.log(`[Asana API] Getting priority tag...`);
-      const priorityTagGid = task.priority
-        ? await getOrCreatePriorityTag(accessToken, task.workspaceGid, task.priority)
-        : null;
-      console.log(`[Asana API] Priority tag GID: ${priorityTagGid || "(no tag)"}`);
+      console.log(`[Asana API] ====== PRIORITY TAG RESOLUTION ======`);
+      console.log(`[Asana API] Task priority value: "${task.priority || '(none)'}"`);
+      
+      let priorityTagGid: string | null = null;
+      if (task.priority) {
+        console.log(`[Asana API] Calling getOrCreatePriorityTag...`);
+        priorityTagGid = await getOrCreatePriorityTag(accessToken, task.workspaceGid, task.priority);
+        console.log(`[Asana API] Returned priority tag GID: ${priorityTagGid || "(null - tag creation failed)"}`);
+      } else {
+        console.log(`[Asana API] No priority specified, skipping tag`);
+      }
       
       // Build task data
+      console.log(`[Asana API] ====== BUILDING TASK DATA ======`);
       const taskData: Record<string, unknown> = {
         name: task.name,
         workspace: task.workspaceGid,
@@ -514,23 +553,44 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
         taskData.assignee = assigneeGid;
       }
       
+      // IMPORTANT: Add tags array if we have a priority tag
       if (priorityTagGid) {
         taskData.tags = [priorityTagGid];
+        console.log(`[Asana API] ✓ Tags array added: [${priorityTagGid}]`);
+      } else {
+        console.log(`[Asana API] ✗ No tags to add (priorityTagGid is null)`);
       }
       
       console.log(`[Asana API] ====== SENDING TO ASANA ======`);
-      console.log(`[Asana API] Request body:`, JSON.stringify({ data: taskData }, null, 2));
+      console.log(`[Asana API] Final taskData keys: ${Object.keys(taskData).join(', ')}`);
+      console.log(`[Asana API] taskData.tags: ${JSON.stringify(taskData.tags) || '(undefined)'}`);
+      console.log(`[Asana API] Full request body:`, JSON.stringify({ data: taskData }, null, 2));
       
-      // Create task with opt_fields to get assignee info back
-      const createdTask = await asanaFetch<AsanaTask>("/tasks?opt_fields=gid,name,permalink_url,due_on,assignee,assignee.name,assignee.email,tags,tags.name", {
+      // Create task with opt_fields to get assignee and tags info back
+      const createdTask = await asanaFetch<AsanaTask & { tags?: AsanaTag[] }>("/tasks?opt_fields=gid,name,permalink_url,due_on,assignee,assignee.name,assignee.email,tags,tags.name", {
         method: "POST",
         body: JSON.stringify({ data: taskData }),
       });
       
       console.log(`[Asana API] ====== TASK CREATED ======`);
       console.log(`[Asana API] Created task GID: ${createdTask.gid}`);
-      console.log(`[Asana API] Created task assignee:`, createdTask.assignee);
+      console.log(`[Asana API] Created task name: ${createdTask.name}`);
+      console.log(`[Asana API] Created task assignee:`, createdTask.assignee ? `${createdTask.assignee.name} (${createdTask.assignee.gid})` : '(none)');
+      console.log(`[Asana API] Created task due_on: ${createdTask.due_on || '(none)'}`);
       console.log(`[Asana API] Created task URL: ${createdTask.permalink_url}`);
+      
+      // Log tags from response
+      if (createdTask.tags && createdTask.tags.length > 0) {
+        console.log(`[Asana API] ✓ Task has ${createdTask.tags.length} tag(s):`);
+        createdTask.tags.forEach((tag, i) => {
+          console.log(`[Asana API]   ${i + 1}. "${tag.name}" (${tag.gid})`);
+        });
+      } else {
+        console.log(`[Asana API] ✗ Task has NO tags in response`);
+        if (priorityTagGid) {
+          console.log(`[Asana API] ⚠️ WARNING: Tag GID ${priorityTagGid} was sent but not returned!`);
+        }
+      }
       
       return createdTask;
     },
