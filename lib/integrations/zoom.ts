@@ -2,8 +2,9 @@ export type ZoomAccessToken = string;
 
 const ZOOM_API_BASE = "https://api.zoom.us/v2";
 
-type ZoomMeeting = {
+export type ZoomMeeting = {
   id: number | string;
+  uuid?: string;
   topic?: string;
   start_time?: string;
   type?: number;
@@ -19,6 +20,49 @@ type ZoomMeetingsResponse = {
   page_size?: number;
   total_records?: number;
   meetings?: ZoomMeeting[];
+};
+
+export type ZoomRecordingFile = {
+  id: string;
+  meeting_id: string;
+  recording_start: string;
+  recording_end: string;
+  file_type: "MP4" | "M4A" | "CHAT" | "TRANSCRIPT" | "VTT" | "CC" | "CSV" | "SUMMARY";
+  file_size?: number;
+  download_url: string;
+  play_url?: string;
+  status: string;
+  recording_type?: string;
+};
+
+export type ZoomRecordingsResponse = {
+  uuid: string;
+  id: number | string;
+  account_id: string;
+  host_id: string;
+  topic: string;
+  type: number;
+  start_time: string;
+  timezone: string;
+  duration: number;
+  total_size?: number;
+  recording_count?: number;
+  share_url?: string;
+  recording_files?: ZoomRecordingFile[];
+  participant_audio_files?: ZoomRecordingFile[];
+};
+
+export type ZoomPastMeetingDetails = {
+  uuid: string;
+  id: number | string;
+  host_id: string;
+  type: number;
+  topic: string;
+  start_time: string;
+  end_time: string;
+  duration: number;
+  total_minutes?: number;
+  participants_count?: number;
 };
 
 export function createZoomClient(accessToken: ZoomAccessToken) {
@@ -119,6 +163,116 @@ export function createZoomClient(accessToken: ZoomAccessToken) {
         last_name?: string;
       };
       return json;
+    },
+
+    /**
+     * Get past meeting details (for completed meetings)
+     * Note: meetingId should be the meeting UUID for past meetings
+     */
+    async getPastMeetingDetails(meetingId: string): Promise<ZoomPastMeetingDetails> {
+      // Double-encode UUID if it contains / or //
+      const encodedId = meetingId.includes('/') 
+        ? encodeURIComponent(encodeURIComponent(meetingId))
+        : encodeURIComponent(meetingId);
+      const json = (await zoomFetch(`/past_meetings/${encodedId}`)) as ZoomPastMeetingDetails;
+      return json;
+    },
+
+    /**
+     * Get cloud recordings for a meeting
+     * Note: meetingId should be the meeting ID (not UUID) for this endpoint
+     */
+    async getMeetingRecordings(meetingId: string): Promise<ZoomRecordingsResponse> {
+      console.log(`[Zoom API] getMeetingRecordings called for meeting ${meetingId}`);
+      const json = (await zoomFetch(`/meetings/${encodeURIComponent(meetingId)}/recordings`)) as ZoomRecordingsResponse;
+      return json;
+    },
+
+    /**
+     * List all cloud recordings for the user
+     */
+    async listUserRecordings(options?: { 
+      from?: string; 
+      to?: string; 
+      pageSize?: number;
+    }): Promise<{ meetings: ZoomRecordingsResponse[] }> {
+      const params = new URLSearchParams();
+      if (options?.from) params.set("from", options.from);
+      if (options?.to) params.set("to", options.to);
+      params.set("page_size", String(options?.pageSize || 30));
+      
+      const json = (await zoomFetch(`/users/me/recordings?${params.toString()}`)) as { 
+        meetings: ZoomRecordingsResponse[];
+      };
+      return json;
+    },
+
+    /**
+     * Download a recording file (returns the content)
+     * For transcript files, this returns the VTT/text content
+     */
+    async downloadRecordingFile(downloadUrl: string): Promise<string> {
+      console.log(`[Zoom API] Downloading recording file from ${downloadUrl.substring(0, 50)}...`);
+      
+      // The download URL already includes authentication via a token param,
+      // but we also add the Bearer token for consistency
+      const res = await fetch(downloadUrl, {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+        },
+      });
+
+      if (!res.ok) {
+        const text = await res.text();
+        console.error(`[Zoom API] Download failed: ${res.status} - ${text}`);
+        throw new Error(`Failed to download recording (${res.status}): ${text || res.statusText}`);
+      }
+
+      const content = await res.text();
+      console.log(`[Zoom API] Downloaded ${content.length} characters`);
+      return content;
+    },
+
+    /**
+     * Get meeting transcript if available
+     * Returns null if no transcript found
+     */
+    async getMeetingTranscript(meetingId: string): Promise<{ transcript: string; format: string } | null> {
+      console.log(`[Zoom API] getMeetingTranscript called for meeting ${meetingId}`);
+      
+      try {
+        const recordings = await this.getMeetingRecordings(meetingId);
+        
+        if (!recordings.recording_files?.length) {
+          console.log(`[Zoom API] No recording files found for meeting ${meetingId}`);
+          return null;
+        }
+
+        // Look for transcript file (VTT or TRANSCRIPT type)
+        const transcriptFile = recordings.recording_files.find(
+          f => f.file_type === "TRANSCRIPT" || f.file_type === "VTT"
+        );
+
+        if (!transcriptFile) {
+          console.log(`[Zoom API] No transcript file found. Available file types:`, 
+            recordings.recording_files.map(f => f.file_type));
+          return null;
+        }
+
+        console.log(`[Zoom API] Found transcript file: ${transcriptFile.file_type}`);
+        
+        // Download the transcript
+        const content = await this.downloadRecordingFile(transcriptFile.download_url);
+        
+        return {
+          transcript: content,
+          format: transcriptFile.file_type,
+        };
+      } catch (error) {
+        console.error(`[Zoom API] Error getting transcript:`, error);
+        // Return null instead of throwing - caller can handle gracefully
+        return null;
+      }
     },
   } as const;
 }
