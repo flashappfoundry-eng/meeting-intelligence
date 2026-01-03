@@ -5,25 +5,18 @@
  * - User information
  * - Workspaces
  * - Projects
- * - Task creation with assignee resolution and priority tags
+ * - Task creation with assignee resolution and priority custom fields
  */
 
 export type AsanaAccessToken = string;
 
 const ASANA_API_BASE = "https://app.asana.com/api/1.0";
 
-// Priority tag names used in Asana
-const PRIORITY_TAGS = {
-  high: "P1 🔴 High Priority",
-  medium: "P2 🟡 Medium",
-  low: "P3 🟢 Low",
-} as const;
-
 // Cache for workspace users (keyed by workspaceGid)
 const workspaceUsersCache = new Map<string, AsanaUser[]>();
 
-// Cache for priority tags (keyed by workspaceGid:priority)
-const priorityTagsCache = new Map<string, string>();
+// Cache for custom field settings per project (keyed by projectGid)
+const customFieldCache = new Map<string, PriorityFieldConfig>();
 
 // ============================================
 // Types
@@ -48,6 +41,18 @@ export interface AsanaProject {
   resource_type?: string;
 }
 
+export interface AsanaCustomField {
+  gid: string;
+  name: string;
+  resource_type?: string;
+  enum_value?: {
+    gid: string;
+    name: string;
+  } | null;
+  text_value?: string | null;
+  number_value?: number | null;
+}
+
 export interface AsanaTask {
   gid: string;
   name: string;
@@ -57,6 +62,7 @@ export interface AsanaTask {
   notes?: string;
   assignee?: AsanaUser | null;
   projects?: AsanaProject[];
+  custom_fields?: AsanaCustomField[];
 }
 
 export interface AsanaTaskInput {
@@ -66,7 +72,7 @@ export interface AsanaTaskInput {
   assignee?: string; // User GID or "me"
   projects?: string[]; // Project GIDs
   workspace?: string; // Workspace GID (required if no project)
-  tags?: string[]; // Tag GIDs
+  custom_fields?: Record<string, string>; // Custom field GID -> value/enum GID
 }
 
 /**
@@ -82,16 +88,22 @@ export interface EnhancedTaskInput {
   workspaceGid: string;
 }
 
-export interface AsanaTag {
-  gid: string;
-  name: string;
-  resource_type?: string;
-}
-
 export interface AsanaTaskCreateResult {
   success: boolean;
   task?: AsanaTask;
   error?: string;
+}
+
+/**
+ * Configuration for a Priority custom field on a project
+ */
+interface PriorityFieldConfig {
+  fieldGid: string;
+  enumOptions: {
+    high: string | null;    // GID for "High" option
+    medium: string | null;  // GID for "Medium" option  
+    low: string | null;     // GID for "Low" option
+  };
 }
 
 // ============================================
@@ -222,108 +234,114 @@ async function resolveAssigneeToGid(
 }
 
 // ============================================
-// Helper Functions for Priority Tags
+// Helper Functions for Priority Custom Fields
 // ============================================
 
 /**
- * Get or create a priority tag in a workspace
+ * Discover the Priority custom field configuration for a project
  */
-async function getOrCreatePriorityTag(
+async function getPriorityFieldConfig(
   accessToken: string,
-  workspaceGid: string,
-  priority: "high" | "medium" | "low"
-): Promise<string | null> {
-  console.log(`[Asana] ====== GET/CREATE PRIORITY TAG ======`);
-  console.log(`[Asana] Priority: ${priority}`);
-  console.log(`[Asana] Workspace GID: ${workspaceGid}`);
-  
-  const cacheKey = `${workspaceGid}:${priority}`;
+  projectGid: string
+): Promise<PriorityFieldConfig | null> {
+  console.log(`[Asana] ====== DISCOVERING PRIORITY CUSTOM FIELD ======`);
+  console.log(`[Asana] Project GID: ${projectGid}`);
   
   // Check cache first
-  const cached = priorityTagsCache.get(cacheKey);
+  const cached = customFieldCache.get(projectGid);
   if (cached) {
-    console.log(`[Asana] ✓ Using cached priority tag: ${cached}`);
+    console.log(`[Asana] ✓ Using cached priority field config`);
     return cached;
   }
-
-  const tagName = PRIORITY_TAGS[priority];
-  console.log(`[Asana] Tag name to find/create: "${tagName}"`);
-
+  
   try {
-    // First, search for existing tag in workspace
-    console.log(`[Asana] Searching for existing tags in workspace...`);
-    const searchUrl = `${ASANA_API_BASE}/workspaces/${workspaceGid}/tags?opt_fields=name,gid&limit=100`;
-    console.log(`[Asana] Search URL: ${searchUrl}`);
+    // Get custom field settings for the project
+    const url = `${ASANA_API_BASE}/projects/${projectGid}/custom_field_settings?opt_fields=custom_field,custom_field.name,custom_field.enum_options,custom_field.enum_options.name,custom_field.enum_options.gid`;
+    console.log(`[Asana] Fetching custom fields from: ${url}`);
     
-    const searchResponse = await fetch(searchUrl, {
+    const response = await fetch(url, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
-
-    console.log(`[Asana] Search response status: ${searchResponse.status}`);
     
-    if (!searchResponse.ok) {
-      const errorText = await searchResponse.text();
-      console.error(`[Asana] ✗ Failed to search tags: ${searchResponse.status}`);
-      console.error(`[Asana] Error response: ${errorText}`);
-      // Continue to try creating the tag anyway
-    } else {
-      const searchData = await searchResponse.json();
-      const tags = searchData.data as AsanaTag[];
-      console.log(`[Asana] Found ${tags.length} tags in workspace`);
-      console.log(`[Asana] Available tags: ${tags.map(t => `"${t.name}"`).join(', ') || '(none)'}`);
-      
-      const existingTag = tags.find((t) => t.name === tagName);
-      
-      if (existingTag) {
-        console.log(`[Asana] ✓ Found existing priority tag: "${existingTag.name}" (${existingTag.gid})`);
-        priorityTagsCache.set(cacheKey, existingTag.gid);
-        return existingTag.gid;
-      }
-      
-      console.log(`[Asana] Tag "${tagName}" not found among existing tags`);
+    console.log(`[Asana] Response status: ${response.status}`);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`[Asana] Failed to get custom fields: ${response.status}`);
+      console.log(`[Asana] Error: ${errorText}`);
+      return null;
     }
-
-    // Tag not found, create it
-    console.log(`[Asana] Creating new priority tag: "${tagName}"`);
     
-    // Use the /tags endpoint with workspace in body (more reliable)
-    const createUrl = `${ASANA_API_BASE}/tags`;
-    const createBody = {
-      data: { 
-        name: tagName,
-        workspace: workspaceGid,  // IMPORTANT: Specify workspace in body
-      },
+    const responseData = await response.json();
+    const settings = responseData.data || [];
+    console.log(`[Asana] Found ${settings.length} custom field setting(s) on project`);
+    
+    if (settings.length === 0) {
+      console.log(`[Asana] Project has no custom fields`);
+      return null;
+    }
+    
+    // Log all available custom fields
+    console.log(`[Asana] Available custom fields:`);
+    settings.forEach((s: { custom_field?: { name?: string; gid?: string } }, i: number) => {
+      console.log(`[Asana]   ${i + 1}. "${s.custom_field?.name}" (${s.custom_field?.gid})`);
+    });
+    
+    // Look for a Priority field (case-insensitive)
+    const prioritySetting = settings.find((s: { custom_field?: { name?: string } }) => 
+      s.custom_field?.name?.toLowerCase() === 'priority'
+    );
+    
+    if (!prioritySetting) {
+      console.log(`[Asana] ✗ No "Priority" custom field found on this project`);
+      console.log(`[Asana] To use priority, add a "Priority" custom field with High/Medium/Low options`);
+      return null;
+    }
+    
+    const field = prioritySetting.custom_field;
+    console.log(`[Asana] ✓ Found Priority field: "${field.name}" (${field.gid})`);
+    
+    // Map enum options (look for High/Medium/Low variants)
+    const enumOptions: PriorityFieldConfig["enumOptions"] = {
+      high: null,
+      medium: null,
+      low: null,
     };
     
-    console.log(`[Asana] Create URL: ${createUrl}`);
-    console.log(`[Asana] Create body: ${JSON.stringify(createBody)}`);
-    
-    const createResponse = await fetch(createUrl, {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${accessToken}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify(createBody),
-    });
-
-    console.log(`[Asana] Create response status: ${createResponse.status}`);
-    
-    const createData = await createResponse.json();
-    console.log(`[Asana] Create response data: ${JSON.stringify(createData)}`);
-
-    if (createResponse.ok) {
-      const newTag = createData.data;
-      console.log(`[Asana] ✓ Created new priority tag: "${newTag.name}" (${newTag.gid})`);
-      priorityTagsCache.set(cacheKey, newTag.gid);
-      return newTag.gid;
+    if (field.enum_options && field.enum_options.length > 0) {
+      console.log(`[Asana] Enum options available:`);
+      for (const opt of field.enum_options) {
+        console.log(`[Asana]   - "${opt.name}" (${opt.gid})`);
+        const name = opt.name.toLowerCase();
+        
+        if (name.includes('high') || name === 'p1' || name === '1') {
+          enumOptions.high = opt.gid;
+          console.log(`[Asana] ✓ Mapped HIGH → "${opt.name}" (${opt.gid})`);
+        } else if (name.includes('medium') || name === 'p2' || name === '2' || name === 'normal') {
+          enumOptions.medium = opt.gid;
+          console.log(`[Asana] ✓ Mapped MEDIUM → "${opt.name}" (${opt.gid})`);
+        } else if (name.includes('low') || name === 'p3' || name === '3') {
+          enumOptions.low = opt.gid;
+          console.log(`[Asana] ✓ Mapped LOW → "${opt.name}" (${opt.gid})`);
+        }
+      }
+    } else {
+      console.log(`[Asana] Priority field has no enum options`);
     }
-
-    console.error(`[Asana] ✗ Failed to create priority tag: ${createResponse.status}`);
-    console.error(`[Asana] Error details: ${JSON.stringify(createData.errors || createData)}`);
-    return null;
+    
+    const config: PriorityFieldConfig = {
+      fieldGid: field.gid,
+      enumOptions,
+    };
+    
+    // Cache the result
+    customFieldCache.set(projectGid, config);
+    console.log(`[Asana] Cached priority field config for project`);
+    
+    return config;
+    
   } catch (error) {
-    console.error(`[Asana] ✗ Exception in getOrCreatePriorityTag:`, error);
+    console.error(`[Asana] ✗ Error discovering priority field:`, error);
     return null;
   }
 }
@@ -333,7 +351,7 @@ async function getOrCreatePriorityTag(
  */
 export function clearAsanaCaches(): void {
   workspaceUsersCache.clear();
-  priorityTagsCache.clear();
+  customFieldCache.clear();
   console.log("[Asana] Cleared all caches");
 }
 
@@ -462,6 +480,10 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
         taskData.workspace = task.workspace;
       }
       
+      if (task.custom_fields) {
+        taskData.custom_fields = task.custom_fields;
+      }
+      
       return asanaFetch<AsanaTask>("/tasks", {
         method: "POST",
         body: JSON.stringify({ data: taskData }),
@@ -502,7 +524,7 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
     /**
      * Create a task with enhanced features:
      * - Resolves assignee names to Asana user GIDs
-     * - Adds priority tags (P1/P2/P3)
+     * - Sets priority via custom fields (if project has a Priority field)
      */
     async createEnhancedTask(task: EnhancedTaskInput): Promise<AsanaTask> {
       console.log(`[Asana API] ====== CREATE ENHANCED TASK ======`);
@@ -520,17 +542,34 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
         : null;
       console.log(`[Asana API] Resolved assignee GID: ${assigneeGid || "(not resolved)"}`);
       
-      // Get priority tag GID
-      console.log(`[Asana API] ====== PRIORITY TAG RESOLUTION ======`);
-      console.log(`[Asana API] Task priority value: "${task.priority || '(none)'}"`);
+      // Priority via custom fields
+      console.log(`[Asana API] ====== PRIORITY CUSTOM FIELD ======`);
+      let customFields: Record<string, string> | undefined;
       
-      let priorityTagGid: string | null = null;
-      if (task.priority) {
-        console.log(`[Asana API] Calling getOrCreatePriorityTag...`);
-        priorityTagGid = await getOrCreatePriorityTag(accessToken, task.workspaceGid, task.priority);
-        console.log(`[Asana API] Returned priority tag GID: ${priorityTagGid || "(null - tag creation failed)"}`);
+      if (task.priority && task.projectGid) {
+        console.log(`[Asana API] Task priority: ${task.priority}`);
+        console.log(`[Asana API] Looking up Priority custom field for project...`);
+        
+        const priorityConfig = await getPriorityFieldConfig(accessToken, task.projectGid);
+        
+        if (priorityConfig) {
+          const enumOptionGid = priorityConfig.enumOptions[task.priority];
+          if (enumOptionGid) {
+            customFields = {
+              [priorityConfig.fieldGid]: enumOptionGid
+            };
+            console.log(`[Asana API] ✓ Will set Priority custom field:`);
+            console.log(`[Asana API]   Field GID: ${priorityConfig.fieldGid}`);
+            console.log(`[Asana API]   Enum Option GID: ${enumOptionGid}`);
+          } else {
+            console.log(`[Asana API] ⚠️ No enum option found for priority "${task.priority}"`);
+            console.log(`[Asana API] Available mappings:`, priorityConfig.enumOptions);
+          }
+        } else {
+          console.log(`[Asana API] ⚠️ Project has no Priority custom field - priority will be skipped`);
+        }
       } else {
-        console.log(`[Asana API] No priority specified, skipping tag`);
+        console.log(`[Asana API] No priority specified or no project GID`);
       }
       
       // Build task data
@@ -553,21 +592,19 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
         taskData.assignee = assigneeGid;
       }
       
-      // IMPORTANT: Add tags array if we have a priority tag
-      if (priorityTagGid) {
-        taskData.tags = [priorityTagGid];
-        console.log(`[Asana API] ✓ Tags array added: [${priorityTagGid}]`);
+      if (customFields) {
+        taskData.custom_fields = customFields;
+        console.log(`[Asana API] ✓ Custom fields added:`, customFields);
       } else {
-        console.log(`[Asana API] ✗ No tags to add (priorityTagGid is null)`);
+        console.log(`[Asana API] No custom fields to add`);
       }
       
       console.log(`[Asana API] ====== SENDING TO ASANA ======`);
       console.log(`[Asana API] Final taskData keys: ${Object.keys(taskData).join(', ')}`);
-      console.log(`[Asana API] taskData.tags: ${JSON.stringify(taskData.tags) || '(undefined)'}`);
       console.log(`[Asana API] Full request body:`, JSON.stringify({ data: taskData }, null, 2));
       
-      // Create task with opt_fields to get assignee and tags info back
-      const createdTask = await asanaFetch<AsanaTask & { tags?: AsanaTag[] }>("/tasks?opt_fields=gid,name,permalink_url,due_on,assignee,assignee.name,assignee.email,tags,tags.name", {
+      // Create task with opt_fields to get assignee and custom fields back
+      const createdTask = await asanaFetch<AsanaTask>("/tasks?opt_fields=gid,name,permalink_url,due_on,assignee,assignee.name,assignee.email,custom_fields,custom_fields.name,custom_fields.enum_value,custom_fields.enum_value.name", {
         method: "POST",
         body: JSON.stringify({ data: taskData }),
       });
@@ -579,17 +616,15 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
       console.log(`[Asana API] Created task due_on: ${createdTask.due_on || '(none)'}`);
       console.log(`[Asana API] Created task URL: ${createdTask.permalink_url}`);
       
-      // Log tags from response
-      if (createdTask.tags && createdTask.tags.length > 0) {
-        console.log(`[Asana API] ✓ Task has ${createdTask.tags.length} tag(s):`);
-        createdTask.tags.forEach((tag, i) => {
-          console.log(`[Asana API]   ${i + 1}. "${tag.name}" (${tag.gid})`);
-        });
-      } else {
-        console.log(`[Asana API] ✗ Task has NO tags in response`);
-        if (priorityTagGid) {
-          console.log(`[Asana API] ⚠️ WARNING: Tag GID ${priorityTagGid} was sent but not returned!`);
+      // Log custom fields from response
+      if (createdTask.custom_fields && createdTask.custom_fields.length > 0) {
+        console.log(`[Asana API] ✓ Task has ${createdTask.custom_fields.length} custom field(s):`);
+        for (const cf of createdTask.custom_fields) {
+          const value = cf.enum_value?.name ?? cf.text_value ?? cf.number_value ?? '(empty)';
+          console.log(`[Asana API]   - ${cf.name}: ${value}`);
         }
+      } else {
+        console.log(`[Asana API] Task has no custom fields in response`);
       }
       
       return createdTask;
