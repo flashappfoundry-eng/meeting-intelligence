@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { createAsanaClient } from '@/lib/integrations/asana';
-import { getUserTokens } from '@/lib/auth/tokens';
+import { getUserTokens, forceRefreshToken } from '@/lib/auth/tokens';
 import { db } from '@/lib/db/client';
 import { platformConnections } from '@/lib/db/schema';
 import { eq } from 'drizzle-orm';
@@ -58,20 +58,47 @@ export async function GET(request: Request) {
         results 
       }, { status: 400 });
     }
-    steps.push({ step: 1, status: 'success', hasTokens: true });
+    steps.push({ step: 1, status: 'success', hasTokens: true, hasRefreshToken: !!tokens.refreshToken });
     
-    // Step 2: Create Asana client with userId for auto-refresh on 401
-    const asanaClient = createAsanaClient(tokens.accessToken, userId);
-    steps.push({ step: 2, action: 'Created Asana client with auto-refresh', status: 'success' });
+    // Step 1.5: Proactively refresh token to ensure we have a valid one
+    steps.push({ step: '1.5', action: 'Proactively refreshing Asana token' });
+    let accessToken = tokens.accessToken;
     
-    // Step 2.5: Test raw custom field API call (for debugging)
-    steps.push({ step: '2.5', action: 'Testing raw Asana custom field API' });
+    try {
+      console.log('[test-priority] Proactively refreshing token...');
+      const refreshResult = await forceRefreshToken(userId, 'asana', tokens);
+      accessToken = refreshResult.accessToken;
+      steps.push({ 
+        step: '1.5', 
+        status: 'refreshed',
+        message: 'Token refreshed successfully',
+        newExpiresAt: refreshResult.expiresAt?.toISOString(),
+      });
+      console.log('[test-priority] Token refreshed successfully');
+    } catch (refreshError) {
+      const refreshErr = refreshError as Error;
+      console.log('[test-priority] Token refresh failed:', refreshErr.message);
+      // Token might still be valid, continue with existing token
+      steps.push({ 
+        step: '1.5', 
+        status: 'kept_existing',
+        message: `Refresh failed (${refreshErr.message}), using existing token`,
+        warning: 'Existing token may be expired',
+      });
+    }
+    
+    // Step 2: Create Asana client with refreshed token and userId for further auto-refresh
+    const asanaClient = createAsanaClient(accessToken, userId);
+    steps.push({ step: 2, action: 'Created Asana client with refreshed token', status: 'success' });
+    
+    // Step 2.5: Test raw custom field API call (for debugging) - using refreshed token
+    steps.push({ step: '2.5', action: 'Testing raw Asana custom field API (with refreshed token)' });
     try {
       const rawUrl = `https://app.asana.com/api/1.0/projects/${projectGid}/custom_field_settings?opt_fields=custom_field.gid,custom_field.name,custom_field.type,custom_field.enum_options.gid,custom_field.enum_options.name`;
       console.log('[test-priority] Raw API URL:', rawUrl);
       
       const rawResponse = await fetch(rawUrl, {
-        headers: { Authorization: `Bearer ${tokens.accessToken}` }
+        headers: { Authorization: `Bearer ${accessToken}` }  // Use refreshed token
       });
       
       const rawText = await rawResponse.text();
