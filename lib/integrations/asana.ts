@@ -246,6 +246,7 @@ async function getPriorityFieldConfig(
 ): Promise<PriorityFieldConfig | null> {
   console.log(`[Asana] ====== DISCOVERING PRIORITY CUSTOM FIELD ======`);
   console.log(`[Asana] Project GID: ${projectGid}`);
+  console.log(`[Asana] Access token preview: ${accessToken.substring(0, 20)}...`);
   
   // Check cache first
   const cached = customFieldCache.get(projectGid);
@@ -255,8 +256,8 @@ async function getPriorityFieldConfig(
   }
   
   try {
-    // Get custom field settings for the project
-    const url = `${ASANA_API_BASE}/projects/${projectGid}/custom_field_settings?opt_fields=custom_field,custom_field.name,custom_field.enum_options,custom_field.enum_options.name,custom_field.enum_options.gid`;
+    // Get custom field settings for the project with comprehensive opt_fields
+    const url = `${ASANA_API_BASE}/projects/${projectGid}/custom_field_settings?opt_fields=custom_field.gid,custom_field.name,custom_field.type,custom_field.resource_subtype,custom_field.enum_options.gid,custom_field.enum_options.name,custom_field.enum_options.enabled`;
     console.log(`[Asana] Fetching custom fields from: ${url}`);
     
     const response = await fetch(url, {
@@ -264,42 +265,74 @@ async function getPriorityFieldConfig(
     });
     
     console.log(`[Asana] Response status: ${response.status}`);
+    console.log(`[Asana] Response headers:`, Object.fromEntries(response.headers.entries()));
     
     if (!response.ok) {
       const errorText = await response.text();
       console.log(`[Asana] Failed to get custom fields: ${response.status}`);
-      console.log(`[Asana] Error: ${errorText}`);
+      console.log(`[Asana] Error response body: ${errorText}`);
       return null;
     }
     
     const responseData = await response.json();
+    
+    // LOG THE RAW RESPONSE
+    console.log(`[Asana] ========== RAW API RESPONSE ==========`);
+    console.log(`[Asana] ${JSON.stringify(responseData, null, 2)}`);
+    console.log(`[Asana] =======================================`);
+    
     const settings = responseData.data || [];
     console.log(`[Asana] Found ${settings.length} custom field setting(s) on project`);
     
     if (settings.length === 0) {
-      console.log(`[Asana] Project has no custom fields`);
+      console.log(`[Asana] Project has no custom fields - responseData.data is empty or missing`);
+      console.log(`[Asana] Full responseData keys: ${Object.keys(responseData).join(', ')}`);
       return null;
     }
     
-    // Log all available custom fields
-    console.log(`[Asana] Available custom fields:`);
-    settings.forEach((s: { custom_field?: { name?: string; gid?: string } }, i: number) => {
-      console.log(`[Asana]   ${i + 1}. "${s.custom_field?.name}" (${s.custom_field?.gid})`);
+    // Log all available custom fields with full details
+    console.log(`[Asana] ========== AVAILABLE CUSTOM FIELDS ==========`);
+    settings.forEach((s: { custom_field?: { name?: string; gid?: string; type?: string; resource_subtype?: string } }, i: number) => {
+      const cf = s.custom_field;
+      console.log(`[Asana] Field ${i + 1}:`);
+      console.log(`[Asana]   - name: "${cf?.name}"`);
+      console.log(`[Asana]   - gid: ${cf?.gid}`);
+      console.log(`[Asana]   - type: ${cf?.type}`);
+      console.log(`[Asana]   - resource_subtype: ${cf?.resource_subtype}`);
+    });
+    console.log(`[Asana] ==============================================`);
+    
+    // Look for a Priority field - try multiple matching strategies
+    console.log(`[Asana] Searching for Priority field...`);
+    
+    const prioritySetting = settings.find((s: { custom_field?: { name?: string } }) => {
+      const fieldName = s.custom_field?.name;
+      if (!fieldName) {
+        console.log(`[Asana] Skipping field with no name`);
+        return false;
+      }
+      
+      const lowerName = fieldName.toLowerCase().trim();
+      const isMatch = lowerName === 'priority' || 
+                      lowerName.includes('priority') ||
+                      lowerName === 'p1/p2/p3' ||
+                      lowerName === 'urgency';
+      
+      console.log(`[Asana] Checking "${fieldName}" (lowercase: "${lowerName}") → ${isMatch ? 'MATCH!' : 'no match'}`);
+      return isMatch;
     });
     
-    // Look for a Priority field (case-insensitive)
-    const prioritySetting = settings.find((s: { custom_field?: { name?: string } }) => 
-      s.custom_field?.name?.toLowerCase() === 'priority'
-    );
-    
     if (!prioritySetting) {
-      console.log(`[Asana] ✗ No "Priority" custom field found on this project`);
+      console.log(`[Asana] ✗ No "Priority" custom field found among ${settings.length} fields`);
+      console.log(`[Asana] Field names found: ${settings.map((s: { custom_field?: { name?: string } }) => `"${s.custom_field?.name}"`).join(', ')}`);
       console.log(`[Asana] To use priority, add a "Priority" custom field with High/Medium/Low options`);
       return null;
     }
     
     const field = prioritySetting.custom_field;
     console.log(`[Asana] ✓ Found Priority field: "${field.name}" (${field.gid})`);
+    console.log(`[Asana] Field type: ${field.type}`);
+    console.log(`[Asana] Field resource_subtype: ${field.resource_subtype}`);
     
     // Map enum options (look for High/Medium/Low variants)
     const enumOptions: PriorityFieldConfig["enumOptions"] = {
@@ -309,9 +342,9 @@ async function getPriorityFieldConfig(
     };
     
     if (field.enum_options && field.enum_options.length > 0) {
-      console.log(`[Asana] Enum options available:`);
+      console.log(`[Asana] Enum options available (${field.enum_options.length}):`);
       for (const opt of field.enum_options) {
-        console.log(`[Asana]   - "${opt.name}" (${opt.gid})`);
+        console.log(`[Asana]   - "${opt.name}" (gid: ${opt.gid}, enabled: ${opt.enabled})`);
         const name = opt.name.toLowerCase();
         
         if (name.includes('high') || name === 'p1' || name === '1') {
@@ -326,8 +359,10 @@ async function getPriorityFieldConfig(
         }
       }
     } else {
-      console.log(`[Asana] Priority field has no enum options`);
+      console.log(`[Asana] Priority field has no enum options - field.enum_options: ${JSON.stringify(field.enum_options)}`);
     }
+    
+    console.log(`[Asana] Final enum mappings: high=${enumOptions.high}, medium=${enumOptions.medium}, low=${enumOptions.low}`);
     
     const config: PriorityFieldConfig = {
       fieldGid: field.gid,
@@ -336,12 +371,13 @@ async function getPriorityFieldConfig(
     
     // Cache the result
     customFieldCache.set(projectGid, config);
-    console.log(`[Asana] Cached priority field config for project`);
+    console.log(`[Asana] ✓ Cached priority field config for project`);
     
     return config;
     
   } catch (error) {
     console.error(`[Asana] ✗ Error discovering priority field:`, error);
+    console.error(`[Asana] Error stack:`, error instanceof Error ? error.stack : 'no stack');
     return null;
   }
 }

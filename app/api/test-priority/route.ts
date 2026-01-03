@@ -64,8 +64,52 @@ export async function GET(request: Request) {
     const asanaClient = createAsanaClient(tokens.accessToken);
     steps.push({ step: 2, action: 'Created Asana client', status: 'success' });
     
-    // Step 3: Discover priority field
-    steps.push({ step: 3, action: 'Discovering priority custom field', projectGid });
+    // Step 2.5: Test raw custom field API call (for debugging)
+    steps.push({ step: '2.5', action: 'Testing raw Asana custom field API' });
+    try {
+      const rawUrl = `https://app.asana.com/api/1.0/projects/${projectGid}/custom_field_settings?opt_fields=custom_field.gid,custom_field.name,custom_field.type,custom_field.enum_options.gid,custom_field.enum_options.name`;
+      console.log('[test-priority] Raw API URL:', rawUrl);
+      
+      const rawResponse = await fetch(rawUrl, {
+        headers: { Authorization: `Bearer ${tokens.accessToken}` }
+      });
+      
+      const rawText = await rawResponse.text();
+      console.log('[test-priority] Raw API response status:', rawResponse.status);
+      console.log('[test-priority] Raw API response body:', rawText);
+      
+      let rawData: { data?: Array<{ custom_field?: { name?: string; gid?: string; type?: string; enum_options?: Array<{ name?: string; gid?: string }> } }> } = { data: [] };
+      try {
+        rawData = JSON.parse(rawText);
+      } catch {
+        console.log('[test-priority] Failed to parse raw response as JSON');
+      }
+      
+      steps.push({
+        step: '2.5',
+        status: rawResponse.ok ? 'success' : 'error',
+        httpStatus: rawResponse.status,
+        fieldsFound: rawData.data?.length || 0,
+        fieldNames: rawData.data?.map((s) => s.custom_field?.name) || [],
+        fieldDetails: rawData.data?.map((s) => ({
+          name: s.custom_field?.name,
+          gid: s.custom_field?.gid,
+          type: s.custom_field?.type,
+          enumOptions: s.custom_field?.enum_options?.map(o => o.name) || []
+        })) || [],
+        rawResponse: rawData,
+      });
+    } catch (rawError) {
+      const rawErr = rawError as Error;
+      steps.push({
+        step: '2.5',
+        status: 'error',
+        error: rawErr.message,
+      });
+    }
+    
+    // Step 3: Discover priority field (using client method)
+    steps.push({ step: 3, action: 'Discovering priority custom field via client', projectGid });
     const priorityConfig = await asanaClient.getPriorityFieldConfig(projectGid);
     
     if (!priorityConfig) {
