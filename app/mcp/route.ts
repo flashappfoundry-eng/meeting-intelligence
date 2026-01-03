@@ -25,43 +25,73 @@ import { handleGetConnectionStatus } from "@/lib/mcp/tools/get-connection-status
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "https://meeting-intelligence-beryl.vercel.app";
 
-// Tool definitions with required scopes
+// Tool definitions with required scopes and annotations
 const TOOLS = {
   getRecentMeetings: {
     name: "getRecentMeetings",
-    description: "List recent meetings from connected platforms (Zoom, Teams, etc.)",
+    description: "List recent meetings from your connected Zoom account. Returns meeting titles, dates, durations, and IDs for further analysis.",
     requiredScopes: ["meetings:read"],
-    requiresPlatform: "zoom", // or "teams", "meet"
+    requiresPlatform: "zoom",
+    annotations: {
+      readOnlyHint: true,      // Skips confirmation - just reads data
+      openWorldHint: true,     // Accesses Zoom API
+      destructiveHint: false,
+    },
   },
   getMeetingSummary: {
     name: "getMeetingSummary",
-    description: "Get an AI-generated summary of a specific meeting",
+    description: "Get an AI-generated summary of a specific meeting including key topics, decisions, and highlights.",
     requiredScopes: ["meetings:read", "meetings:summary"],
     requiresPlatform: "zoom",
+    annotations: {
+      readOnlyHint: true,
+      openWorldHint: true,
+      destructiveHint: false,
+    },
   },
   getActionItems: {
     name: "getActionItems", 
-    description: "Extract action items from a meeting transcript",
+    description: "Extract action items and tasks from a meeting transcript. Returns structured list with assignees, due dates, and priorities.",
     requiredScopes: ["meetings:read", "meetings:summary"],
-    requiresPlatform: null, // Can work with pasted transcripts
+    requiresPlatform: null,
+    annotations: {
+      readOnlyHint: true,      // Analysis only, no writes
+      openWorldHint: true,     // Uses OpenAI for extraction
+      destructiveHint: false,
+    },
   },
   createTasks: {
     name: "createTasks",
-    description: "Create tasks in connected task manager (Asana, Jira, etc.) from action items",
+    description: "Create tasks in Asana from action items. Batch creates multiple tasks at once with titles, due dates, and priorities in your connected Asana workspace and project.",
     requiredScopes: ["tasks:write"],
-    requiresPlatform: "asana", // or "jira", "notion"
+    requiresPlatform: "asana",
+    annotations: {
+      readOnlyHint: false,     // WRITES data to Asana
+      openWorldHint: true,     // Accesses Asana API
+      destructiveHint: false,  // Creates tasks, doesn't delete
+    },
   },
   pasteTranscript: {
     name: "pasteTranscript",
-    description: "Process a pasted meeting transcript for summary and action items",
+    description: "Process a pasted meeting transcript to extract summary and action items. Use this when you have transcript text to analyze.",
     requiredScopes: ["meetings:summary"],
     requiresPlatform: null,
+    annotations: {
+      readOnlyHint: true,      // Just processes text
+      openWorldHint: true,     // Uses OpenAI
+      destructiveHint: false,
+    },
   },
   getConnectionStatus: {
     name: "getConnectionStatus",
-    description: "Check which platforms are connected and their status",
-    requiredScopes: [], // No special scopes needed
+    description: "Check which platforms (Zoom, Asana) are connected and their current status. Shows connection health and available workspaces.",
+    requiredScopes: [],
     requiresPlatform: null,
+    annotations: {
+      readOnlyHint: true,
+      openWorldHint: false,    // Internal database only
+      destructiveHint: false,
+    },
   },
 };
 
@@ -198,11 +228,7 @@ function handleToolsList(id: string | number) {
     name: tool.name,
     description: tool.description,
     inputSchema: getToolInputSchema(tool.name),
-    annotations: {
-      readOnlyHint: !tool.name.startsWith("create"),
-      destructiveHint: false,
-      openWorldHint: tool.requiresPlatform !== null,
-    },
+    annotations: tool.annotations,
   }));
   
   return NextResponse.json({
@@ -359,13 +385,18 @@ function getToolInputSchema(toolName: string): object {
         properties: {
           meetingId: {
             type: "string",
-            description: "The meeting ID to extract action items from",
+            description: "The Zoom meeting ID to extract action items from (fetches transcript from cloud recording)",
           },
           transcript: {
             type: "string",
-            description: "Raw transcript text (if not using meeting ID)",
+            description: "Raw transcript text to analyze directly (use this if you don't have a meeting ID)",
+          },
+          meetingTitle: {
+            type: "string",
+            description: "Optional title for the meeting (helps provide context)",
           },
         },
+        description: "Provide either meetingId (to fetch from Zoom) OR transcript (direct text). Returns structured action items with assignees, due dates, and priorities.",
       };
     
     case "createTasks":

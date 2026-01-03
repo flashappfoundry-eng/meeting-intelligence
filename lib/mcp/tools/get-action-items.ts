@@ -5,6 +5,13 @@
  * Extracts action items from a meeting transcript. Can work with:
  * 1. A Zoom meeting ID (fetches transcript from cloud recording)
  * 2. A raw transcript provided directly
+ * 
+ * Returns structured array of action items with:
+ * - title: Clear description of the task
+ * - assignee: Person responsible (if mentioned)
+ * - dueDate: Deadline (if mentioned)
+ * - priority: high/medium/low based on urgency indicators
+ * - context: Which discussion/topic the item came from
  */
 
 import { type AuthenticatedUser } from "@/lib/auth/mcp-auth";
@@ -16,6 +23,9 @@ import {
   validateTranscriptForProcessing,
   type ActionItem,
 } from "@/lib/integrations/openai";
+import { 
+  type GetActionItemsOutput,
+} from "@/lib/dx/schemas";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "https://meeting-intelligence-beryl.vercel.app";
 
@@ -31,11 +41,13 @@ export async function handleGetActionItems(
 ): Promise<MCPToolResponse> {
   const meetingId = args.meetingId as string | undefined;
   const transcript = args.transcript as string | undefined;
+  const meetingTitleArg = args.meetingTitle as string | undefined;
   
   console.log("[getActionItems] ====== START ======");
   console.log("[getActionItems] User:", user.id, user.email);
   console.log("[getActionItems] Meeting ID:", meetingId || "(none)");
   console.log("[getActionItems] Transcript provided:", !!transcript);
+  console.log("[getActionItems] Meeting title:", meetingTitleArg || "(none)");
   
   // Need either a meeting ID or a transcript
   if (!meetingId && !transcript) {
@@ -116,21 +128,30 @@ export async function handleGetActionItems(
     console.log("[getActionItems] Found", result.count, "action items");
     console.log("[getActionItems] ====== SUCCESS ======");
     
+    // Construct output matching GetActionItemsOutput schema
+    const outputData: GetActionItemsOutput = {
+      meetingId: meetingId || undefined,
+      meetingTitle: meetingTopic || meetingTitleArg || undefined,
+      meetingDate: meetingDate || undefined,
+      actionItems: result.actionItems,
+      extractedAt: new Date().toISOString(),
+    };
+    
     if (result.count === 0) {
+      const message = meetingTopic 
+        ? `No action items found in meeting "${meetingTopic}".\n\nThis meeting may have been informational without explicit tasks or follow-ups assigned.`
+        : "No action items found in this transcript.\n\nThe conversation may not have included explicit tasks, commitments, or follow-ups.";
+      
       return {
         content: [
           {
             type: "text",
-            text: meetingTopic 
-              ? `No action items found in meeting "${meetingTopic}".\n\nThis meeting may have been informational without explicit tasks or follow-ups assigned.`
-              : "No action items found in this transcript.\n\nThe conversation may not have included explicit tasks, commitments, or follow-ups.",
+            text: message,
           },
         ],
         _meta: {
-          meetingId,
-          meetingTopic,
-          actionItems: [],
-          count: 0,
+          ...outputData,
+          message,
         },
       };
     }
@@ -150,13 +171,7 @@ export async function handleGetActionItems(
             `💡 *Use createTasks to add these to Asana or another task manager.*`,
         },
       ],
-      _meta: {
-        meetingId,
-        meetingTopic,
-        meetingDate,
-        actionItems: result.actionItems,
-        count: result.count,
-      },
+      _meta: outputData,
     };
     
   } catch (error) {
@@ -335,7 +350,7 @@ function formatActionItems(items: ActionItem[]): string {
       low: "🟢",
     }[item.priority];
     
-    let line = `${index + 1}. ${priorityEmoji} **${item.task}**`;
+    let line = `${index + 1}. ${priorityEmoji} **${item.title}**`;
     
     const details: string[] = [];
     if (item.assignee) {

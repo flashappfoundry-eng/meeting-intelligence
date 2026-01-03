@@ -110,5 +110,50 @@ export const phase2ToolSchemas = {
 
 export type Phase2ToolName = keyof typeof phase2ToolSchemas;
 
+// ============================================
+// Action Item Schemas
+// ============================================
 
+/**
+ * Schema for individual action items extracted from meetings
+ */
+export const ActionItemSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  assignee: z.string().nullable(),
+  dueDate: z.string().nullable(), // ISO date or relative like "Friday"
+  priority: z.enum(['high', 'medium', 'low']).default('medium'),
+  context: z.string().nullable(), // Discussion topic this came from
+  completed: z.boolean().default(false),
+});
+
+export type ActionItem = z.infer<typeof ActionItemSchema>;
+
+/**
+ * Schema for the getActionItems tool output
+ */
+export const GetActionItemsOutputSchema = z.object({
+  meetingId: z.string().optional(),
+  meetingTitle: z.string().optional(),
+  meetingDate: z.string().optional(),
+  actionItems: z.array(ActionItemSchema),
+  extractedAt: z.string(), // ISO timestamp
+  message: z.string().optional(), // Optional message (e.g., for empty results)
+});
+
+export type GetActionItemsOutput = z.infer<typeof GetActionItemsOutputSchema>;
+
+/**
+ * Schema for the getActionItems tool input
+ */
+export const GetActionItemsInputSchema = z.object({
+  meetingId: z.string().optional(),
+  transcript: z.string().optional(),
+  meetingTitle: z.string().optional(),
+}).refine(
+  (data) => data.meetingId || data.transcript,
+  { message: "Either meetingId or transcript must be provided" }
+);
+
+export type GetActionItemsInput = z.infer<typeof GetActionItemsInputSchema>;
 

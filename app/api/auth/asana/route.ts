@@ -76,7 +76,14 @@ export async function GET(request: Request) {
     userId,
   });
 
-  console.log("[Asana OAuth] Redirecting to Asana with userId:", userId);
+  console.log("[Asana OAuth] Cookies set:", {
+    hasState: !!state,
+    statePreview: state.slice(0, 10) + "...",
+    hasCodeVerifier: !!codeVerifier,
+    userId,
+    cookiesSet: ["asana_oauth_state", "asana_code_verifier", "asana_user_id"],
+  });
+  console.log("[Asana OAuth] Redirecting to Asana");
 
   return NextResponse.redirect(authUrl);
 }

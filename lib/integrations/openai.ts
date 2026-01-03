@@ -268,11 +268,13 @@ ${transcript}
 // ============================================
 
 export type ActionItem = {
-  task: string;
-  assignee?: string;
-  dueDate?: string;
+  id: string;
+  title: string;
+  assignee: string | null;
+  dueDate: string | null;
   priority: "high" | "medium" | "low";
-  context?: string;
+  context: string | null;
+  completed: boolean;
 };
 
 export type ActionItemsResult = {
@@ -281,7 +283,25 @@ export type ActionItemsResult = {
 };
 
 /**
- * Extract action items from a meeting transcript
+ * Test transcript for validating action item extraction.
+ * Expected output: 4-5 action items with correct assignees and priorities.
+ */
+export const TEST_TRANSCRIPT = `
+[00:00:15] Sarah: Let's review the Q4 roadmap. John, can you finalize the budget report by Friday?
+[00:01:30] John: Sure, I'll have it done. Also, Maria needs to schedule the client demo for next week.
+[00:02:45] Maria: Got it. I'll send out invites by tomorrow. Should we also discuss the urgent security patch?
+[00:03:20] Sarah: Yes, that's critical. Dev team needs to deploy the fix by end of day today.
+[00:04:00] John: I'll coordinate with DevOps on that ASAP.
+`;
+
+/**
+ * Extract action items from a meeting transcript using GPT-4o-mini.
+ * 
+ * Identifies:
+ * - Tasks explicitly assigned ("John will...", "Sarah to handle...")
+ * - Deadlines mentioned ("by Friday", "next week", "end of month")
+ * - Priority indicators ("urgent", "ASAP", "when possible")
+ * - Context (which topic/discussion the item came from)
  */
 export async function extractActionItems(input: {
   transcriptText: string;
@@ -289,6 +309,15 @@ export async function extractActionItems(input: {
 }): Promise<ActionItemsResult> {
   console.log("[OpenAI] extractActionItems called");
   console.log("[OpenAI] Transcript length:", input.transcriptText.length);
+  
+  // Handle empty transcript
+  if (!input.transcriptText || input.transcriptText.trim().length === 0) {
+    console.log("[OpenAI] Empty transcript provided, returning empty result");
+    return {
+      actionItems: [],
+      count: 0,
+    };
+  }
   
   const openai = getOpenAIClient();
   
@@ -298,29 +327,49 @@ export async function extractActionItems(input: {
     ? input.transcriptText.slice(0, maxTranscriptLength) + "\n\n[Transcript truncated...]"
     : input.transcriptText;
 
-  const systemPrompt = `You are an action item extraction assistant. Analyze the meeting transcript and extract all action items, tasks, and commitments made.
+  const systemPrompt = `You are an expert action item extraction assistant. Your job is to carefully analyze meeting transcripts and identify ALL action items, tasks, and commitments.
 
-Return a JSON object with the following structure:
+## Task Assignment Patterns to Identify:
+- Direct assignments: "John will...", "Sarah to handle...", "Can you [name] do..."
+- Self-commitments: "I'll take care of...", "I will send...", "Let me handle..."
+- Team assignments: "Dev team needs to...", "Marketing should...", "We need to..."
+- Requests: "[Name], can you...", "[Name] needs to...", "Please [name]..."
+
+## Deadline Patterns to Identify:
+- Specific dates: "by Friday", "on Monday", "before the 15th"
+- Relative dates: "next week", "tomorrow", "end of day", "end of month", "by EOD"
+- Time-sensitive: "today", "this afternoon", "within the hour"
+- Convert relative dates to context-appropriate descriptions (e.g., "Friday" not "2024-01-15")
+
+## Priority Indicators:
+- HIGH priority: "urgent", "ASAP", "critical", "immediately", "top priority", "must be done today", "blocking"
+- MEDIUM priority: Default for standard tasks without urgency markers
+- LOW priority: "when possible", "when you have time", "nice to have", "eventually", "low priority"
+
+## Output Format:
+Return a JSON object with:
 {
   "actionItems": [
     {
-      "task": "Clear description of what needs to be done",
-      "assignee": "Person responsible (if mentioned, otherwise null)",
-      "dueDate": "Due date in YYYY-MM-DD format (if mentioned, otherwise null)",
+      "title": "Clear, actionable task description (imperative form)",
+      "assignee": "Person responsible (first name or role, null if unclear)",
+      "dueDate": "Due date as mentioned (e.g., 'Friday', 'next week', 'end of day today', or null)",
       "priority": "high" | "medium" | "low",
-      "context": "Brief context from the meeting (1-2 sentences)"
+      "context": "Brief context: what discussion/topic this came from (1 sentence)"
     }
   ]
 }
 
-Guidelines:
-- Include explicit action items ("John will send the report")
-- Include implied commitments ("We need to follow up on...")
-- Include mentioned deadlines ("by end of week", "before Tuesday")
-- Set priority based on urgency/importance discussed
-- If no action items are found, return {"actionItems": []}`;
+## Guidelines:
+1. Extract EVERY task, commitment, or follow-up mentioned
+2. Use the exact assignee name as spoken (e.g., "John" not "John Smith")
+3. For team assignments, use the team name (e.g., "Dev team", "DevOps")
+4. Preserve deadline language as spoken when possible
+5. Always include context to help understand the task origin
+6. If no action items are found, return {"actionItems": []}
+7. Write titles in clear, actionable imperative form (e.g., "Finalize budget report")`;
 
-  const userPrompt = `Extract action items from this meeting transcript:
+  const userPrompt = `Extract ALL action items from this meeting transcript. Be thorough - don't miss any tasks, commitments, or follow-ups.
 
 ${input.meetingTitle ? `Meeting: ${input.meetingTitle}` : ""}
 
@@ -342,19 +391,40 @@ ${transcript}
 
     const content = response.choices[0]?.message?.content;
     if (!content) {
-      throw new Error("No response from OpenAI");
+      console.error("[OpenAI] No response content from API");
+      throw new Error("No response from OpenAI API");
     }
 
     console.log("[OpenAI] Action items extracted successfully");
+    console.log("[OpenAI] Raw response:", content.substring(0, 500));
     
-    const parsed = JSON.parse(content);
-    const actionItems: ActionItem[] = (parsed.actionItems || parsed.items || []).map((item: Record<string, unknown>) => ({
-      task: String(item.task || item.title || ""),
-      assignee: item.assignee ? String(item.assignee) : undefined,
-      dueDate: item.dueDate || item.due_date ? String(item.dueDate || item.due_date) : undefined,
-      priority: (item.priority as ActionItem["priority"]) || "medium",
-      context: item.context ? String(item.context) : undefined,
-    })).filter((item: ActionItem) => item.task.length > 0);
+    let parsed;
+    try {
+      parsed = JSON.parse(content);
+    } catch (parseError) {
+      console.error("[OpenAI] Failed to parse JSON response:", parseError);
+      console.warn("[OpenAI] Falling back to empty array due to invalid JSON");
+      return {
+        actionItems: [],
+        count: 0,
+      };
+    }
+    
+    const rawItems = parsed.actionItems || parsed.items || parsed.action_items || [];
+    
+    const actionItems: ActionItem[] = rawItems.map((item: Record<string, unknown>, index: number) => ({
+      id: `action-${Date.now()}-${index}`,
+      title: String(item.title || item.task || ""),
+      assignee: item.assignee ? String(item.assignee) : null,
+      dueDate: item.dueDate || item.due_date || item.deadline 
+        ? String(item.dueDate || item.due_date || item.deadline) 
+        : null,
+      priority: validatePriority(item.priority),
+      context: item.context ? String(item.context) : null,
+      completed: false,
+    })).filter((item: ActionItem) => item.title.length > 0);
+
+    console.log("[OpenAI] Parsed", actionItems.length, "action items");
 
     return {
       actionItems,
@@ -362,8 +432,38 @@ ${transcript}
     };
   } catch (error) {
     console.error("[OpenAI] Error extracting action items:", error);
+    
+    // Provide descriptive error messages
+    if (error instanceof Error) {
+      if (error.message.includes("API key") || error.message.includes("OPENAI_API_KEY")) {
+        throw new Error("OpenAI API key is not configured. Please contact support.");
+      }
+      if (error.message.includes("rate limit") || error.message.includes("429")) {
+        throw new Error("OpenAI rate limit exceeded. Please try again in a moment.");
+      }
+      if (error.message.includes("timeout") || error.message.includes("ETIMEDOUT")) {
+        throw new Error("OpenAI request timed out. Please try again.");
+      }
+    }
+    
     throw error;
   }
+}
+
+/**
+ * Validate and normalize priority value
+ */
+function validatePriority(value: unknown): "high" | "medium" | "low" {
+  if (typeof value === "string") {
+    const normalized = value.toLowerCase().trim();
+    if (normalized === "high" || normalized === "urgent" || normalized === "critical") {
+      return "high";
+    }
+    if (normalized === "low") {
+      return "low";
+    }
+  }
+  return "medium";
 }
 
 // ============================================

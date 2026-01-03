@@ -10,20 +10,28 @@ import { type AuthenticatedUser } from "@/lib/auth/mcp-auth";
 import { getUserTokens, refreshTokenIfNeeded } from "@/lib/auth/tokens";
 import { 
   createAsanaClient, 
-  type AsanaTaskInput,
+  type EnhancedTaskInput,
   type AsanaWorkspace,
   type AsanaProject,
 } from "@/lib/integrations/asana";
 
 const BASE_URL = process.env.NEXT_PUBLIC_BASE_URL || "https://meeting-intelligence-beryl.vercel.app";
 
-// Action item type from getActionItems tool
+// Action item type - supports both "title" (from schema) and "task" (legacy)
 interface ActionItem {
-  task: string;
+  title?: string;  // Schema field name
+  task?: string;   // Legacy/alternative field name
+  name?: string;   // Another alternative
   assignee?: string;
   dueDate?: string;
   priority?: "high" | "medium" | "low";
   context?: string;
+  notes?: string;
+}
+
+// Helper to get task name from various possible field names
+function getTaskName(item: ActionItem): string {
+  return item.title || item.task || item.name || "Untitled Task";
 }
 
 export async function handleCreateTasks(
@@ -42,6 +50,8 @@ export async function handleCreateTasks(
   console.log("[createTasks] Action items count:", actionItems?.length || 0);
   console.log("[createTasks] Project ID:", projectId || "(default)");
   console.log("[createTasks] Workspace ID:", workspaceId || "(default)");
+  console.log("[createTasks] Input received:", JSON.stringify(args, null, 2));
+  console.log("[createTasks] First action item:", actionItems?.[0]);
   
   // Validate input
   if (!actionItems || actionItems.length === 0) {
@@ -57,7 +67,7 @@ export async function handleCreateTasks(
             "```\n" +
             "createTasks({\n" +
             '  actionItems: [\n' +
-            '    { task: "Send proposal", assignee: "John", dueDate: "2026-01-15" }\n' +
+            '    { title: "Send proposal", assignee: "John", dueDate: "2026-01-15" }\n' +
             '  ]\n' +
             "})\n" +
             "```",
@@ -172,47 +182,80 @@ export async function handleCreateTasks(
       console.log("[createTasks] No project specified, creating tasks in workspace only");
     }
     
-    // Convert action items to Asana tasks
-    const asanaTasks: AsanaTaskInput[] = actionItems.map(item => {
-      // Add priority emoji to task name
-      const priorityPrefix = item.priority === "high" ? "🔴 " : 
-                            item.priority === "medium" ? "🟡 " : 
-                            item.priority === "low" ? "🟢 " : "";
+    // Convert action items to enhanced Asana tasks (with assignee resolution & priority tags)
+    console.log("[createTasks] ====== CONVERTING ACTION ITEMS ======");
+    
+    const enhancedTasks: EnhancedTaskInput[] = actionItems.map((item, index) => {
+      // Get task name from any available field
+      const taskName = getTaskName(item);
       
-      const taskInput: AsanaTaskInput = {
-        name: `${priorityPrefix}${item.task}`,
-        workspace: targetWorkspace!.gid,
+      console.log(`[createTasks] Processing item ${index + 1}:`, { 
+        title: item.title, 
+        task: item.task, 
+        name: item.name,
+        assignee: item.assignee,
+        dueDate: item.dueDate,
+        priority: item.priority,
+        context: item.context,
+        resolved: taskName 
+      });
+      
+      // Convert relative date to ISO format
+      const convertedDueDate = convertRelativeDateToISO(item.dueDate);
+      console.log(`[createTasks] Due date conversion: "${item.dueDate}" → "${convertedDueDate}"`);
+      
+      const taskInput: EnhancedTaskInput = {
+        name: taskName,
+        workspaceGid: targetWorkspace!.gid,
+        projectGid: targetProject?.gid || targetWorkspace!.gid,
+        assigneeName: item.assignee || null,
+        priority: item.priority,
+        due_on: convertedDueDate || undefined,
       };
       
       // Add notes with context
-      if (item.context || item.assignee) {
+      const notesContent = item.notes || item.context;
+      if (notesContent) {
         const notes: string[] = [];
-        if (item.context) {
-          notes.push(`Context: ${item.context}`);
-        }
-        if (item.assignee) {
-          notes.push(`Originally assigned to: ${item.assignee}`);
-        }
+        notes.push(`Context: ${notesContent}`);
         notes.push(`\nCreated from Meeting Intelligence`);
         taskInput.notes = notes.join("\n");
+      } else {
+        taskInput.notes = "Created from Meeting Intelligence";
       }
       
-      // Add due date if valid
-      if (item.dueDate && isValidDate(item.dueDate)) {
-        taskInput.due_on = item.dueDate;
-      }
-      
-      // Add to project if available
-      if (targetProject) {
-        taskInput.projects = [targetProject.gid];
-      }
+      console.log(`[createTasks] Final task input ${index + 1}:`, {
+        name: taskInput.name,
+        assigneeName: taskInput.assigneeName,
+        priority: taskInput.priority,
+        due_on: taskInput.due_on,
+        workspaceGid: taskInput.workspaceGid,
+        projectGid: taskInput.projectGid,
+      });
       
       return taskInput;
     });
     
-    // Create tasks
-    console.log("[createTasks] Creating", asanaTasks.length, "tasks...");
-    const results = await asana.createTasks(asanaTasks);
+    // Create tasks with enhanced features (assignee resolution + priority tags)
+    console.log("[createTasks] ====== CALLING createEnhancedTasks ======");
+    console.log("[createTasks] Task count:", enhancedTasks.length);
+    console.log("[createTasks] Tasks to create:", JSON.stringify(enhancedTasks.map(t => ({
+      name: t.name,
+      assigneeName: t.assigneeName,
+      priority: t.priority,
+      due_on: t.due_on,
+    })), null, 2));
+    
+    const results = await asana.createEnhancedTasks(enhancedTasks);
+    
+    console.log("[createTasks] ====== RESULTS ======");
+    console.log("[createTasks] Results:", JSON.stringify(results.map(r => ({
+      success: r.success,
+      taskGid: r.task?.gid,
+      taskName: r.task?.name,
+      assignee: r.task?.assignee,
+      error: r.error,
+    })), null, 2));
     
     // Count successes and failures
     const succeeded = results.filter(r => r.success);
@@ -235,8 +278,22 @@ export async function handleCreateTasks(
       responseText += "**Tasks created:**\n";
       succeeded.forEach((result, index) => {
         const task = result.task!;
+        const originalItem = actionItems[results.indexOf(result)];
         const url = task.permalink_url || `https://app.asana.com/0/0/${task.gid}`;
-        responseText += `${index + 1}. [${task.name}](${url})`;
+        
+        // Priority indicator
+        const priorityIcon = originalItem?.priority === "high" ? "🔴" : 
+                            originalItem?.priority === "low" ? "🟢" : "🟡";
+        
+        responseText += `${index + 1}. ${priorityIcon} [${task.name}](${url})`;
+        
+        // Show assignee if resolved
+        if (task.assignee?.name) {
+          responseText += ` 👤 ${task.assignee.name}`;
+        } else if (originalItem?.assignee) {
+          responseText += ` _(assignee "${originalItem.assignee}" not found in workspace)_`;
+        }
+        
         if (task.due_on) {
           responseText += ` 📅 ${task.due_on}`;
         }
@@ -249,7 +306,8 @@ export async function handleCreateTasks(
       responseText += `⚠️ **${failed.length} task${failed.length !== 1 ? "s" : ""} failed to create:**\n`;
       failed.forEach((result, index) => {
         const originalItem = actionItems[results.indexOf(result)];
-        responseText += `${index + 1}. "${originalItem?.task || "Unknown"}" - ${result.error}\n`;
+        const taskName = originalItem ? getTaskName(originalItem) : "Unknown";
+        responseText += `${index + 1}. "${taskName}" - ${result.error}\n`;
       });
     }
     
@@ -277,7 +335,7 @@ export async function handleCreateTasks(
         } : null,
         results: results.map((r, i) => ({
           success: r.success,
-          taskName: actionItems[i]?.task || "Unknown",
+          taskName: actionItems[i] ? getTaskName(actionItems[i]) : "Unknown",
           taskGid: r.task?.gid,
           taskUrl: r.task?.permalink_url || (r.task?.gid ? `https://app.asana.com/0/0/${r.task.gid}` : null),
           error: r.error,
@@ -341,7 +399,104 @@ export async function handleCreateTasks(
 }
 
 /**
- * Validate date string is in YYYY-MM-DD format
+ * Convert relative date strings to ISO format (YYYY-MM-DD)
+ * Handles: "today", "tomorrow", "Friday", "next week", "end of day", etc.
+ */
+function convertRelativeDateToISO(relativeDate: string | null | undefined): string | null {
+  if (!relativeDate) return null;
+  
+  const today = new Date();
+  const lowerDate = relativeDate.toLowerCase().trim();
+  
+  console.log(`[DATE_CONVERT] Converting: "${relativeDate}"`);
+  
+  // Handle ISO dates (already formatted)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(relativeDate)) {
+    console.log(`[DATE_CONVERT] Already ISO format: ${relativeDate}`);
+    return relativeDate;
+  }
+  
+  // Handle "today" or "end of day" or "EOD"
+  if (lowerDate === 'today' || lowerDate.includes('end of day') || lowerDate === 'eod') {
+    const result = today.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "today/EOD" → ${result}`);
+    return result;
+  }
+  
+  // Handle "tomorrow"
+  if (lowerDate === 'tomorrow') {
+    const tomorrow = new Date(today);
+    tomorrow.setDate(today.getDate() + 1);
+    const result = tomorrow.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "tomorrow" → ${result}`);
+    return result;
+  }
+  
+  // Handle day names (Monday, Tuesday, etc.)
+  const days = ['sunday', 'monday', 'tuesday', 'wednesday', 'thursday', 'friday', 'saturday'];
+  const dayIndex = days.findIndex(d => lowerDate.includes(d));
+  if (dayIndex !== -1) {
+    const currentDay = today.getDay();
+    let daysUntil = dayIndex - currentDay;
+    if (daysUntil <= 0) daysUntil += 7; // Next week if day has passed
+    const targetDate = new Date(today);
+    targetDate.setDate(today.getDate() + daysUntil);
+    const result = targetDate.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "${days[dayIndex]}" → ${result} (in ${daysUntil} days)`);
+    return result;
+  }
+  
+  // Handle "end of week" / "this week"
+  if (lowerDate.includes('end of week') || lowerDate === 'this week') {
+    const friday = new Date(today);
+    const currentDay = today.getDay();
+    const daysUntilFriday = currentDay <= 5 ? (5 - currentDay) : (5 + 7 - currentDay);
+    friday.setDate(today.getDate() + daysUntilFriday);
+    const result = friday.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "end of week" → ${result}`);
+    return result;
+  }
+  
+  // Handle "next week"
+  if (lowerDate.includes('next week')) {
+    const nextMonday = new Date(today);
+    const currentDay = today.getDay();
+    const daysUntilMonday = currentDay === 0 ? 1 : (8 - currentDay);
+    nextMonday.setDate(today.getDate() + daysUntilMonday);
+    const result = nextMonday.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "next week" → ${result}`);
+    return result;
+  }
+  
+  // Handle "end of month"
+  if (lowerDate.includes('end of month')) {
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const result = endOfMonth.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "end of month" → ${result}`);
+    return result;
+  }
+  
+  // Handle "ASAP" - treat as today
+  if (lowerDate === 'asap' || lowerDate.includes('immediately')) {
+    const result = today.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] "ASAP" → ${result}`);
+    return result;
+  }
+  
+  // Try to parse as a date string
+  const parsed = new Date(relativeDate);
+  if (!isNaN(parsed.getTime())) {
+    const result = parsed.toISOString().split('T')[0];
+    console.log(`[DATE_CONVERT] Parsed as date: ${result}`);
+    return result;
+  }
+  
+  console.warn(`[DATE_CONVERT] Could not parse date: "${relativeDate}" - will be skipped`);
+  return null;
+}
+
+/**
+ * Validate date string is in YYYY-MM-DD format (legacy, kept for reference)
  */
 function isValidDate(dateStr: string): boolean {
   const regex = /^\d{4}-\d{2}-\d{2}$/;
