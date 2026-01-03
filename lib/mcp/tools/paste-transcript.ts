@@ -215,7 +215,7 @@ function formatActionItems(items: ActionItem[]): string {
       low: "🟢",
     }[item.priority];
     
-    let line = `${index + 1}. ${priorityEmoji} **${item.task}**`;
+    let line = `${index + 1}. ${priorityEmoji} **${item.title}**`;
     
     const details: string[] = [];
     if (item.assignee) {
