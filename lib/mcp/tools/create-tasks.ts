@@ -38,6 +38,11 @@ export async function handleCreateTasks(
   user: AuthenticatedUser,
   args: Record<string, unknown>
 ) {
+  // Log raw input to see exactly what ChatGPT is sending
+  console.log(`[createTasks] ========== RAW INPUT ==========`);
+  console.log(`[createTasks] ${JSON.stringify(args, null, 2)}`);
+  console.log(`[createTasks] ================================`);
+  
   // Parse arguments
   const actionItems = args.actionItems as ActionItem[] | undefined;
   const projectId = args.projectId as string | undefined;

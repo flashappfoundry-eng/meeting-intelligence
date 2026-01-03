@@ -97,7 +97,7 @@ export interface AsanaTaskCreateResult {
 /**
  * Configuration for a Priority custom field on a project
  */
-interface PriorityFieldConfig {
+export interface PriorityFieldConfig {
   fieldGid: string;
   enumOptions: {
     high: string | null;    // GID for "High" option
@@ -666,6 +666,14 @@ export function createAsanaClient(accessToken: AsanaAccessToken) {
     async getTask(taskGid: string): Promise<AsanaTask> {
       console.log(`[Asana API] Getting task ${taskGid}`);
       return asanaFetch<AsanaTask>(`/tasks/${taskGid}`);
+    },
+
+    /**
+     * Get the Priority custom field configuration for a project
+     * Returns the field GID and enum option GIDs for high/medium/low
+     */
+    async getPriorityFieldConfig(projectGid: string): Promise<PriorityFieldConfig | null> {
+      return getPriorityFieldConfig(accessToken, projectGid);
     },
 
     /**

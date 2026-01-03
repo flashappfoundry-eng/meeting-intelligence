@@ -7,6 +7,9 @@
  */
 
 import { NextResponse } from "next/server";
+
+// Schema version to help detect if ChatGPT is using stale schema
+const MCP_SCHEMA_VERSION = '2.0.1-priority-fix';
 import {
   authenticateMCPRequest,
   buildAuthRequiredResponse,
@@ -62,7 +65,7 @@ const TOOLS = {
   },
   createTasks: {
     name: "createTasks",
-    description: "Create tasks in Asana from action items. Batch creates multiple tasks at once with titles, due dates, and priorities in your connected Asana workspace and project.",
+    description: `Create tasks in Asana from action items. Schema version: ${MCP_SCHEMA_VERSION}. Accepts priority field (high/medium/low). Batch creates multiple tasks at once with titles, due dates, and priorities in your connected Asana workspace and project.`,
     requiredScopes: ["tasks:write"],
     requiresPlatform: "asana",
     annotations: {
@@ -211,6 +214,7 @@ function handleInitialize(id: string | number) {
       serverInfo: {
         name: "meeting-intelligence",
         version: "2.0.0",
+        schemaVersion: MCP_SCHEMA_VERSION,
       },
       capabilities: {
         tools: {},
