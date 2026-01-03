@@ -341,10 +341,24 @@ export async function extractActionItems(input: {
 - Time-sensitive: "today", "this afternoon", "within the hour"
 - Convert relative dates to context-appropriate descriptions (e.g., "Friday" not "2024-01-15")
 
-## Priority Indicators:
-- HIGH priority: "urgent", "ASAP", "critical", "immediately", "top priority", "must be done today", "blocking"
-- MEDIUM priority: Default for standard tasks without urgency markers
-- LOW priority: "when possible", "when you have time", "nice to have", "eventually", "low priority"
+## PRIORITY DETECTION (REQUIRED FOR EVERY ITEM):
+Every action item MUST have a priority field set to "high", "medium", or "low".
+
+HIGH priority - set when you see these signals:
+- Words: "urgent", "critical", "ASAP", "immediately", "right now", "emergency"
+- Blocking language: "blocking", "blocker", "blocked by this", "blocks the release"
+- Time pressure: "by end of day", "EOD", "today", "must be done today"
+- Escalation: "top priority", "highest priority", "P1", "P0", "drop everything"
+
+LOW priority - set when you see these signals:
+- Flexibility: "when you have time", "when possible", "when you get a chance"
+- No urgency: "no rush", "not urgent", "low priority", "can wait"
+- Deferred: "eventually", "at some point", "nice to have", "backlog", "someday"
+
+MEDIUM priority - DEFAULT when no clear urgency indicators:
+- Standard deadlines like "by Friday", "next week" without urgency modifiers
+- Regular tasks without time pressure language
+- If unsure, use "medium"
 
 ## Output Format:
 Return a JSON object with:
@@ -354,7 +368,7 @@ Return a JSON object with:
       "title": "Clear, actionable task description (imperative form)",
       "assignee": "Person responsible (first name or role, null if unclear)",
       "dueDate": "Due date as mentioned (e.g., 'Friday', 'next week', 'end of day today', or null)",
-      "priority": "high" | "medium" | "low",
+      "priority": "high", "medium", or "low" (REQUIRED - never omit this field!),
       "context": "Brief context: what discussion/topic this came from (1 sentence)"
     }
   ]
@@ -366,8 +380,9 @@ Return a JSON object with:
 3. For team assignments, use the team name (e.g., "Dev team", "DevOps")
 4. Preserve deadline language as spoken when possible
 5. Always include context to help understand the task origin
-6. If no action items are found, return {"actionItems": []}
-7. Write titles in clear, actionable imperative form (e.g., "Finalize budget report")`;
+6. ALWAYS set priority - look for urgency signals in the surrounding context
+7. If no action items are found, return {"actionItems": []}
+8. Write titles in clear, actionable imperative form (e.g., "Finalize budget report")`;
 
   const userPrompt = `Extract ALL action items from this meeting transcript. Be thorough - don't miss any tasks, commitments, or follow-ups.
 
@@ -412,19 +427,46 @@ ${transcript}
     
     const rawItems = parsed.actionItems || parsed.items || parsed.action_items || [];
     
-    const actionItems: ActionItem[] = rawItems.map((item: Record<string, unknown>, index: number) => ({
-      id: `action-${Date.now()}-${index}`,
-      title: String(item.title || item.task || ""),
-      assignee: item.assignee ? String(item.assignee) : null,
-      dueDate: item.dueDate || item.due_date || item.deadline 
-        ? String(item.dueDate || item.due_date || item.deadline) 
-        : null,
-      priority: validatePriority(item.priority),
-      context: item.context ? String(item.context) : null,
-      completed: false,
-    })).filter((item: ActionItem) => item.title.length > 0);
+    console.log("[OpenAI] ====== PROCESSING EXTRACTED ITEMS ======");
+    console.log("[OpenAI] Raw items count:", rawItems.length);
+    
+    const actionItems: ActionItem[] = rawItems.map((item: Record<string, unknown>, index: number) => {
+      const title = String(item.title || item.task || "");
+      const context = item.context ? String(item.context) : null;
+      
+      // First, try to use GPT's priority
+      let priority = validatePriority(item.priority);
+      const gptPriority = item.priority;
+      
+      // If GPT didn't provide priority or returned something invalid, use fallback detection
+      if (!gptPriority || gptPriority === undefined || gptPriority === null) {
+        console.log(`[OpenAI] Item ${index + 1}: GPT priority missing, using fallback detection`);
+        const textToAnalyze = `${title} ${context || ''}`;
+        priority = detectPriorityFromText(textToAnalyze);
+        console.log(`[OpenAI] Item ${index + 1}: Fallback detected priority: ${priority}`);
+      } else {
+        console.log(`[OpenAI] Item ${index + 1}: GPT returned priority: "${gptPriority}" → normalized to: "${priority}"`);
+      }
+      
+      return {
+        id: `action-${Date.now()}-${index}`,
+        title,
+        assignee: item.assignee ? String(item.assignee) : null,
+        dueDate: item.dueDate || item.due_date || item.deadline 
+          ? String(item.dueDate || item.due_date || item.deadline) 
+          : null,
+        priority,
+        context,
+        completed: false,
+      };
+    }).filter((item: ActionItem) => item.title.length > 0);
 
-    console.log("[OpenAI] Parsed", actionItems.length, "action items");
+    console.log("[OpenAI] ====== EXTRACTED ACTION ITEMS ======");
+    console.log("[OpenAI] Total valid items:", actionItems.length);
+    actionItems.forEach((item, i) => {
+      console.log(`[OpenAI] ${i + 1}. "${item.title.substring(0, 50)}${item.title.length > 50 ? '...' : ''}"`);
+      console.log(`[OpenAI]    Priority: ${item.priority} | Assignee: ${item.assignee || '(none)'} | Due: ${item.dueDate || '(none)'}`);
+    });
 
     return {
       actionItems,
@@ -456,14 +498,61 @@ ${transcript}
 function validatePriority(value: unknown): "high" | "medium" | "low" {
   if (typeof value === "string") {
     const normalized = value.toLowerCase().trim();
-    if (normalized === "high" || normalized === "urgent" || normalized === "critical") {
+    if (normalized === "high" || normalized === "urgent" || normalized === "critical" || normalized === "p1" || normalized === "p0") {
       return "high";
     }
-    if (normalized === "low") {
+    if (normalized === "low" || normalized === "p3") {
       return "low";
+    }
+    if (normalized === "medium" || normalized === "normal" || normalized === "p2") {
+      return "medium";
     }
   }
   return "medium";
+}
+
+/**
+ * Detect priority from text content using keyword matching.
+ * Used as a fallback when GPT doesn't return a clear priority.
+ */
+function detectPriorityFromText(text: string): "high" | "medium" | "low" {
+  const lowerText = text.toLowerCase();
+  
+  // High priority patterns - check these first
+  const highPatterns = [
+    'urgent', 'critical', 'asap', 'immediately', 'right now',
+    'blocking', 'blocker', 'blocked by', 'blocks',
+    'top priority', 'highest priority', 'p1', 'p0',
+    'by end of day', 'eod', 'by eod', 'end of day today',
+    'emergency', 'escalate', 'fire', 'hotfix',
+    'must be done today', 'need this today', 'needs to be today',
+    'drop everything', 'priority one', 'priority 1'
+  ];
+  
+  for (const pattern of highPatterns) {
+    if (lowerText.includes(pattern)) {
+      console.log(`[Priority] Detected HIGH priority from pattern: "${pattern}"`);
+      return 'high';
+    }
+  }
+  
+  // Low priority patterns
+  const lowPatterns = [
+    'when you have time', 'when possible', 'when you get a chance',
+    'no rush', 'not urgent', 'low priority', 'lower priority',
+    'eventually', 'at some point', 'nice to have', 'nice-to-have',
+    'backlog', 'p3', 'someday', 'whenever', 'if you have time',
+    'not a priority', 'can wait', 'no hurry', 'take your time'
+  ];
+  
+  for (const pattern of lowPatterns) {
+    if (lowerText.includes(pattern)) {
+      console.log(`[Priority] Detected LOW priority from pattern: "${pattern}"`);
+      return 'low';
+    }
+  }
+  
+  return 'medium';
 }
 
 // ============================================

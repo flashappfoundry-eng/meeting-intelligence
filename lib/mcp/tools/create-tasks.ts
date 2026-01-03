@@ -200,6 +200,13 @@ export async function handleCreateTasks(
         resolved: taskName 
       });
       
+      // Explicit priority logging
+      if (item.priority) {
+        console.log(`[createTasks] ✓ Item ${index + 1} has priority: "${item.priority}"`);
+      } else {
+        console.log(`[createTasks] ⚠️ Item ${index + 1} has NO PRIORITY SET - will default to medium`);
+      }
+      
       // Convert relative date to ISO format
       const convertedDueDate = convertRelativeDateToISO(item.dueDate);
       console.log(`[createTasks] Due date conversion: "${item.dueDate}" → "${convertedDueDate}"`);
